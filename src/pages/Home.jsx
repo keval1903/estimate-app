@@ -53,10 +53,6 @@ export default function Home() {
             <div className="home-btn-sub">View, edit or reprint old bills</div>
           </div>
         </button>
-
-        <div style={{ textAlign: 'center', marginTop: 32, color: 'var(--text-muted)', fontSize: 13 }}>
-          AB Estimate Billing • Free Multi-Device App
-        </div>
       </div>
     </div>
   )
