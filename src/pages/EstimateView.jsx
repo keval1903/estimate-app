@@ -262,13 +262,19 @@ export default function EstimateView() {
           margin: 0;
         }
         @media print {
-          .no-print { display: none !important; }
-          body { background: white; margin: 0; }
-          .app-container { max-width: 100%; padding: 0; margin: 0; min-height: 0; }
+          .no-print, .toast { display: none !important; }
+          html, body, #root, .app-container { 
+            height: auto !important; 
+            min-height: auto !important; 
+            margin: 0 !important; 
+            padding: 0 !important; 
+            overflow: visible !important;
+          }
           #print-area {
             padding: 10mm !important;
             background: white !important;
             margin: 0 !important;
+            box-sizing: border-box !important;
           }
           #estimate-preview table {
             width: 100% !important;
