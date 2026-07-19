@@ -258,8 +258,8 @@ export default function EstimateView() {
       {/* Print CSS */}
       <style>{`
         @page {
-          size: A4;
-          margin: 0; /* Setting margin 0 hides the default browser header/footer (date, url) */
+          size: A4 portrait;
+          margin: 0;
         }
         @media print {
           body * { visibility: hidden; }
@@ -267,9 +267,18 @@ export default function EstimateView() {
           #print-area {
             position: fixed;
             top: 0; left: 0;
-            width: 100%;
-            padding: 10mm !important;
+            width: 210mm;
+            padding: 10mm;
             background: white;
+            overflow: hidden;
+          }
+          #estimate-preview table {
+            width: 100% !important;
+            table-layout: fixed !important;
+          }
+          #estimate-preview td {
+            word-wrap: break-word !important;
+            overflow-wrap: break-word !important;
           }
         }
       `}</style>
