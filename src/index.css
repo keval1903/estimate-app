@@ -230,11 +230,7 @@ body {
 .conn-ok  { background: #d1fae5; color: #065f46; }
 .conn-err { background: #fee2e2; color: #991b1b; }
 
-@media print {
-  body > * { display: none; }
-  #print-area { display: block !important; }
-  #print-area { position: fixed; top: 0; left: 0; width: 100%; padding: 20px; background: #fff; }
-}
+
 @media (max-width: 480px) {
   .field-row, .field-row-3 { grid-template-columns: 1fr; }
   .preview-actions .btn { font-size: 13px; padding: 10px 12px; }
