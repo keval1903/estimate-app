@@ -259,7 +259,7 @@ export default function EstimateView() {
       <style>{`
         @page {
           size: A4;
-          margin: 10mm;
+          margin: 0; /* Setting margin 0 hides the default browser header/footer (date, url) */
         }
         @media print {
           body * { visibility: hidden; }
@@ -268,6 +268,7 @@ export default function EstimateView() {
             position: fixed;
             top: 0; left: 0;
             width: 100%;
+            padding: 10mm !important;
             background: white;
           }
         }
