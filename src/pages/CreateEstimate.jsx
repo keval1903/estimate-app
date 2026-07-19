@@ -76,6 +76,7 @@ export default function CreateEstimate() {
   const [productSearch, setProductSearch] = useState('')
   const [productSuggestions, setProductSuggestions] = useState([])
   const [showSuggestions, setShowSuggestions] = useState(false)
+  const [suggestionIdx, setSuggestionIdx] = useState(-1)
   const [allProducts, setAllProducts] = useState([])
 
   // site autocomplete
@@ -85,6 +86,8 @@ export default function CreateEstimate() {
 
   const productInputRef = useRef()
   const siteInputRef = useRef()
+  const nosInputRef = useRef()
+  const qtyInputRef = useRef()
 
   // ── Load products & sites ──
   useEffect(() => {
@@ -94,38 +97,72 @@ export default function CreateEstimate() {
       .then(({ data }) => setAllSites(data || []))
   }, [])
 
-  // ── Load existing estimate for edit ──
+  const draftKey = isEdit ? `estimate_draft_${id}` : 'estimate_draft_new'
+
+  // ── Load existing estimate or draft ──
   useEffect(() => {
-    if (!isEdit) return
     async function load() {
-      setLoading(true)
-      const { data: est, error } = await supabase
-        .from('estimates').select('*').eq('id', id).single()
-      if (error || !est) { showToast('Estimate not found', 'error'); navigate('/estimates'); return }
-      setBillDate(est.bill_date)
-      setTransport(est.transport || '')
-      setSiteName(est.site_name || '')
-      setExistingBillNumber(est.bill_number)
-      const { data: eitems } = await supabase
-        .from('estimate_items').select('*')
-        .eq('estimate_id', id).order('serial_number')
-      setItems((eitems || []).map(it => ({
-        id: it.id,
-        product_id: it.product_id,
-        product_name_snapshot: it.product_name_snapshot,
-        length_snapshot: it.length_snapshot,
-        width_snapshot: it.width_snapshot,
-        nos: it.nos ?? '',
-        quantity: it.quantity ?? '',
-        unit_snapshot: it.unit_snapshot,
-        rate: it.rate,
-        calculation_type_snapshot: it.calculation_type_snapshot,
-        amount: it.amount
-      })))
-      setLoading(false)
+      let parsedDraft = null
+      const savedDraft = localStorage.getItem(draftKey)
+      if (savedDraft) {
+        try { parsedDraft = JSON.parse(savedDraft) } catch (e) {}
+      }
+
+      if (isEdit) {
+        setLoading(true)
+        const { data: est, error } = await supabase
+          .from('estimates').select('*').eq('id', id).single()
+        if (error || !est) { showToast('Estimate not found', 'error'); navigate('/estimates'); return }
+        
+        if (parsedDraft) {
+          setBillDate(parsedDraft.billDate)
+          setTransport(parsedDraft.transport || '')
+          setSiteName(parsedDraft.siteName || '')
+          setItems(parsedDraft.items || [])
+          setTimeout(() => showToast('Unsaved draft restored'), 500)
+        } else {
+          setBillDate(est.bill_date)
+          setTransport(est.transport || '')
+          setSiteName(est.site_name || '')
+          const { data: eitems } = await supabase
+            .from('estimate_items').select('*')
+            .eq('estimate_id', id).order('serial_number')
+          setItems((eitems || []).map(it => ({
+            id: it.id,
+            product_id: it.product_id,
+            product_name_snapshot: it.product_name_snapshot,
+            length_snapshot: it.length_snapshot,
+            width_snapshot: it.width_snapshot,
+            nos: it.nos ?? '',
+            quantity: it.quantity ?? '',
+            unit_snapshot: it.unit_snapshot,
+            rate: it.rate,
+            calculation_type_snapshot: it.calculation_type_snapshot,
+            amount: it.amount
+          })))
+        }
+        setExistingBillNumber(est.bill_number)
+        setLoading(false)
+      } else {
+        if (parsedDraft) {
+          setBillDate(parsedDraft.billDate)
+          setTransport(parsedDraft.transport || '')
+          setSiteName(parsedDraft.siteName || '')
+          setItems(parsedDraft.items || [])
+          setTimeout(() => showToast('Unsaved draft restored'), 500)
+        }
+        setLoading(false)
+      }
     }
     load()
   }, [id])
+
+  // ── Auto-save draft ──
+  useEffect(() => {
+    if (loading) return // don't save while initial load is happening
+    const draft = { billDate, transport, siteName, items }
+    localStorage.setItem(draftKey, JSON.stringify(draft))
+  }, [billDate, transport, siteName, items, draftKey, loading])
 
   // ── Recalc totals when items change ──
   useEffect(() => { setTotals(calcTotals(items)) }, [items])
@@ -133,12 +170,13 @@ export default function CreateEstimate() {
   // ── Product search ──
   useEffect(() => {
     const q = productSearch.trim().toLowerCase()
-    if (!q) { setProductSuggestions([]); return }
+    if (!q) { setProductSuggestions([]); setSuggestionIdx(-1); return }
     const results = allProducts.filter(p =>
       p.product_name.toLowerCase().includes(q)
     ).slice(0, 8)
     setProductSuggestions(results)
     setShowSuggestions(results.length > 0)
+    setSuggestionIdx(-1)
   }, [productSearch, allProducts])
 
   // ── Site search ──
@@ -177,6 +215,37 @@ export default function CreateEstimate() {
     setProductSearch(p.product_name)
     setShowSuggestions(false)
     setProductSuggestions([])
+    setSuggestionIdx(-1)
+
+    setTimeout(() => {
+      if (p.calculation_type === 'SQFT') nosInputRef.current?.focus()
+      else qtyInputRef.current?.focus()
+    }, 50)
+  }
+
+  function handleProductKeyDown(e) {
+    if (!showSuggestions || productSuggestions.length === 0) return
+    if (e.key === 'ArrowDown') {
+      e.preventDefault()
+      setSuggestionIdx(prev => (prev < productSuggestions.length - 1 ? prev + 1 : prev))
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault()
+      setSuggestionIdx(prev => (prev > 0 ? prev - 1 : 0))
+    } else if (e.key === 'Enter') {
+      e.preventDefault()
+      if (suggestionIdx >= 0 && suggestionIdx < productSuggestions.length) {
+        selectProduct(productSuggestions[suggestionIdx])
+      } else {
+        selectProduct(productSuggestions[0])
+      }
+    }
+  }
+
+  function handleInputKeyDown(e) {
+    if (e.key === 'Enter') {
+      e.preventDefault()
+      saveItem()
+    }
   }
 
   // ── Item form field change ──
@@ -291,6 +360,7 @@ export default function CreateEstimate() {
 
         // save site if new
         await saveSite(siteName.trim().toUpperCase())
+        localStorage.removeItem(draftKey) // clear draft on success
         showToast('Estimate updated ✓')
         navigate(`/estimate/view/${id}`)
 
@@ -330,6 +400,7 @@ export default function CreateEstimate() {
         if (itemErr) throw itemErr
 
         await saveSite(siteName.trim().toUpperCase())
+        localStorage.removeItem(draftKey) // clear draft on success
         showToast('Estimate saved ✓')
         navigate(`/estimate/view/${est.id}`)
       }
@@ -415,14 +486,15 @@ export default function CreateEstimate() {
         </div>
 
         {/* Items */}
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
-          <span className="section-label">{items.length} Item{items.length !== 1 ? 's' : ''}</span>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12, marginTop: 24 }}>
+          <span className="section-label" style={{ margin: 0 }}>{items.length} Item{items.length !== 1 ? 's' : ''}</span>
+          <button className="btn btn-primary btn-sm" onClick={openAddItem}>+ ADD ITEM</button>
         </div>
 
         {items.length === 0 ? (
           <div className="empty-state" style={{ padding: '28px 20px' }}>
             <div className="empty-icon">📋</div>
-            <p>No items yet. Tap + ADD ITEM below.</p>
+            <p>No items yet. Tap + ADD ITEM to begin.</p>
           </div>
         ) : items.map((it, idx) => (
           <div key={idx} className="item-card">
@@ -447,12 +519,6 @@ export default function CreateEstimate() {
             </div>
           </div>
         ))}
-
-        {/* Add item button */}
-        <button className="btn btn-secondary btn-full" style={{ marginTop: 4, marginBottom: 16 }}
-          onClick={openAddItem}>
-          + ADD ITEM
-        </button>
 
         {/* Totals */}
         {items.length > 0 && (
@@ -502,6 +568,7 @@ export default function CreateEstimate() {
                   ref={productInputRef}
                   value={productSearch}
                   onChange={e => { setProductSearch(e.target.value); setShowSuggestions(true) }}
+                  onKeyDown={handleProductKeyDown}
                   onFocus={() => setShowSuggestions(productSuggestions.length > 0)}
                   onBlur={() => setTimeout(() => setShowSuggestions(false), 200)}
                   placeholder="Type product name to search..."
@@ -509,8 +576,9 @@ export default function CreateEstimate() {
                 />
                 {showSuggestions && productSuggestions.length > 0 && (
                   <div className="autocomplete-list">
-                    {productSuggestions.map(p => (
+                    {productSuggestions.map((p, i) => (
                       <div key={p.id} className="autocomplete-item"
+                        style={suggestionIdx === i ? { background: 'var(--bg)', borderLeft: '3px solid var(--accent)' } : {}}
                         onMouseDown={() => selectProduct(p)}>
                         <div style={{ fontWeight: 600 }}>{p.product_name}</div>
                         <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>
@@ -539,7 +607,9 @@ export default function CreateEstimate() {
               <div className="field">
                 <label>Nos. (Number of Pieces) *</label>
                 <input name="nos" type="number" inputMode="decimal"
+                  ref={nosInputRef}
                   value={itemForm.nos} onChange={handleItemChange}
+                  onKeyDown={handleInputKeyDown}
                   placeholder="e.g. 10" autoFocus={false} />
                 {itemForm.nos && itemForm.length_snapshot && itemForm.width_snapshot && (
                   <div style={{ fontSize: 13, color: 'var(--accent)', marginTop: 4, fontWeight: 600 }}>
@@ -555,7 +625,9 @@ export default function CreateEstimate() {
               <div className="field">
                 <label>Quantity ({itemForm.unit_snapshot || 'units'}) *</label>
                 <input name="quantity" type="number" inputMode="decimal"
+                  ref={qtyInputRef}
                   value={itemForm.quantity} onChange={handleItemChange}
+                  onKeyDown={handleInputKeyDown}
                   placeholder="e.g. 5" />
               </div>
             )}
@@ -565,6 +637,7 @@ export default function CreateEstimate() {
               <label>Rate (₹) *</label>
               <input name="rate" type="number" inputMode="decimal"
                 value={itemForm.rate} onChange={handleItemChange}
+                onKeyDown={handleInputKeyDown}
                 placeholder="0.00" />
             </div>
 

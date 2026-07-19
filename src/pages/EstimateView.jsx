@@ -11,6 +11,8 @@ export default function EstimateView() {
   const [items, setItems] = useState([])
   const [loading, setLoading] = useState(true)
   const [exporting, setExporting] = useState('')
+  const [paperSize, setPaperSize] = useState('a4')
+  const [layoutMode, setLayoutMode] = useState('full')
   const previewRef = useRef()
 
   useEffect(() => {
@@ -48,7 +50,7 @@ export default function EstimateView() {
       const el = previewRef.current
       const canvas = await html2canvas(el, { scale: 2, useCORS: true, backgroundColor: '#fff' })
       const imgData = canvas.toDataURL('image/png')
-      const pdf = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' })
+      const pdf = new jsPDF({ orientation: 'portrait', unit: 'mm', format: paperSize })
       const pdfW = pdf.internal.pageSize.getWidth()
       const pdfH = (canvas.height * pdfW) / canvas.width
       pdf.addImage(imgData, 'PNG', 0, 0, pdfW, pdfH)
@@ -137,6 +139,17 @@ export default function EstimateView() {
 
       {/* Action buttons */}
       <div className="preview-actions no-print">
+        <div style={{ display: 'inline-flex', gap: 8, marginRight: 'auto' }}>
+          <select className="btn btn-secondary btn-sm" value={paperSize} onChange={e => setPaperSize(e.target.value)}>
+            <option value="a4">Size: A4</option>
+            <option value="a5">Size: A5</option>
+          </select>
+          <select className="btn btn-secondary btn-sm" value={layoutMode} onChange={e => setLayoutMode(e.target.value)}>
+            <option value="full">Layout: Full</option>
+            <option value="compact">Layout: Compact</option>
+          </select>
+        </div>
+        
         <button className="btn btn-secondary btn-sm"
           onClick={() => navigate(`/estimate/edit/${id}`)}>✏️ Edit</button>
         <button className="btn btn-primary btn-sm"
@@ -159,6 +172,14 @@ export default function EstimateView() {
       <div id="print-area" style={{ padding: '0 8px 100px', background: 'var(--bg)' }}>
         <div id="estimate-preview" ref={previewRef}>
           <table style={{ width: '100%', borderCollapse: 'collapse', border: '1.5px solid #000', fontFamily: 'Arial, sans-serif', fontSize: 13, color: '#000', background: '#fff' }}>
+            <colgroup>
+              <col style={{ width: 30 }} />
+              <col style={{ width: 'auto' }} />
+              <col style={{ width: 38 }} />
+              <col style={{ width: 88 }} />
+              <col style={{ width: 52 }} />
+              <col style={{ width: 80 }} />
+            </colgroup>
             <tbody>
               {/* Title row */}
               <tr>
@@ -199,7 +220,7 @@ export default function EstimateView() {
                     border: '1px solid #000', padding: '6px 6px', fontWeight: 700,
                     textAlign: i === 1 ? 'left' : 'center',
                     fontSize: 12,
-                    width: i === 0 ? 36 : i === 1 ? 'auto' : i === 2 ? 44 : i === 3 ? 88 : i === 4 ? 60 : 80
+                    width: i === 0 ? 30 : i === 1 ? 'auto' : i === 2 ? 38 : i === 3 ? 88 : i === 4 ? 52 : 80
                   }}>{h}</td>
                 ))}
               </tr>
@@ -225,7 +246,7 @@ export default function EstimateView() {
               ))}
 
               {/* Empty padding rows */}
-              {Array.from({ length: Math.max(0, 12 - items.length) }).map((_, i) => (
+              {Array.from({ length: layoutMode === 'compact' ? 2 : Math.max(0, 12 - items.length) }).map((_, i) => (
                 <tr key={`empty-${i}`}>
                   <td style={{ border: '1px solid #000', height: 26 }}>&nbsp;</td>
                   <td style={{ border: '1px solid #000' }} />
@@ -258,7 +279,7 @@ export default function EstimateView() {
       {/* Print CSS */}
       <style>{`
         @page {
-          size: A4 portrait;
+          size: ${paperSize === 'a5' ? 'A5' : 'A4'} portrait;
           margin: 0;
         }
         @media print {
