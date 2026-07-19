@@ -103,9 +103,7 @@ export default function EstimateList() {
                 </div>
                 <div style={{ textAlign: 'right' }}>
                   <div className="est-total">₹{formatTotal(est.grand_total)}</div>
-                  <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 2 }}>
-                    {est.total_nos} nos · {est.total_quantity} qty
-                  </div>
+
                 </div>
               </div>
 
