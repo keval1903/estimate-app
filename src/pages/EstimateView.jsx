@@ -82,7 +82,7 @@ export default function EstimateView() {
     if (navigator.share) {
       try {
         await navigator.share({ title: `Estimate #${estimate.bill_number}`, text })
-      } catch {}
+      } catch { }
     } else {
       try {
         await navigator.clipboard.writeText(text)
@@ -110,7 +110,7 @@ export default function EstimateView() {
           window.open(`https://wa.me/?text=${encodeURIComponent(getSummaryText())}`, '_blank')
         }, 'image/png')
         return
-      } catch {}
+      } catch { }
     }
     // Desktop: open WhatsApp Web with text
     window.open(`https://wa.me/?text=${encodeURIComponent(getSummaryText())}`, '_blank')
@@ -156,7 +156,7 @@ export default function EstimateView() {
       </div>
 
       {/* ── ESTIMATE PREVIEW ── */}
-      <div style={{ padding: '0 8px 100px', background: 'var(--bg)' }}>
+      <div id="print-area" style={{ padding: '0 8px 100px', background: 'var(--bg)' }}>
         <div id="estimate-preview" ref={previewRef}>
           <table style={{ width: '100%', borderCollapse: 'collapse', border: '1.5px solid #000', fontFamily: 'Arial, sans-serif', fontSize: 13, color: '#000', background: '#fff' }}>
             <tbody>
@@ -257,11 +257,19 @@ export default function EstimateView() {
 
       {/* Print CSS */}
       <style>{`
+        @page {
+          size: A4;
+          margin: 10mm;
+        }
         @media print {
-          .no-print { display: none !important; }
-          body { background: white; margin: 0; }
-          .app-container { max-width: 100%; }
-          #estimate-preview { padding: 10mm; }
+          body * { visibility: hidden; }
+          #print-area, #print-area * { visibility: visible; }
+          #print-area {
+            position: fixed;
+            top: 0; left: 0;
+            width: 100%;
+            background: white;
+          }
         }
       `}</style>
 
