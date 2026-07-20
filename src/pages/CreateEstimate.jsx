@@ -50,6 +50,12 @@ const EMPTY_ITEM = {
   rate: '', calculation_type_snapshot: 'QUANTITY', amount: 0
 }
 
+const EMPTY_PRODUCT_FORM = {
+  product_name: '', length: '', width: '',
+  unit: '', rate: '', calculation_type: 'QUANTITY'
+}
+const UNITS = ['Sq.Ft', 'Nos.', 'Kg.', 'Bundle', 'Rmt', 'Ltr', 'Pkt', 'Box', 'Set', 'Pair']
+
 // ── Main Component ────────────────────────────────────────────────────────────
 export default function CreateEstimate() {
   const navigate = useNavigate()
@@ -78,6 +84,11 @@ export default function CreateEstimate() {
   const [showSuggestions, setShowSuggestions] = useState(false)
   const [suggestionIdx, setSuggestionIdx] = useState(-1)
   const [allProducts, setAllProducts] = useState([])
+
+  // new product state
+  const [showProductModal, setShowProductModal] = useState(false)
+  const [productForm, setProductForm] = useState(EMPTY_PRODUCT_FORM)
+  const [savingProduct, setSavingProduct] = useState(false)
 
   // site autocomplete
   const [siteSuggestions, setSiteSuggestions] = useState([])
@@ -277,6 +288,55 @@ export default function CreateEstimate() {
     setProductSearch(it.product_name_snapshot)
     setEditingItemIdx(idx)
     setShowItemModal(true)
+  }
+
+  // ── Create New Product ──
+  function handleProductFormChange(e) {
+    const { name, value } = e.target
+    setProductForm(f => {
+      const next = { ...f, [name]: value }
+      if (name === 'unit') next.calculation_type = value === 'Sq.Ft' ? 'SQFT' : 'QUANTITY'
+      if (name === 'calculation_type' && value === 'QUANTITY') { next.length = ''; next.width = '' }
+      return next
+    })
+  }
+
+  function validateProduct() {
+    if (!productForm.product_name.trim()) return 'Product name is required'
+    if (!productForm.unit.trim()) return 'Unit is required'
+    if (!productForm.rate || isNaN(productForm.rate) || Number(productForm.rate) < 0) return 'Valid rate is required'
+    if (productForm.calculation_type === 'SQFT') {
+      if (!productForm.length || isNaN(productForm.length)) return 'Length required for Sq.Ft products'
+      if (!productForm.width  || isNaN(productForm.width))  return 'Width required for Sq.Ft products'
+    }
+    return null
+  }
+
+  async function handleProductSave() {
+    const err = validateProduct()
+    if (err) { showToast(err, 'error'); return }
+    setSavingProduct(true)
+    const payload = {
+      product_name: productForm.product_name.trim().toUpperCase(),
+      unit: productForm.unit.trim(), rate: Number(productForm.rate),
+      calculation_type: productForm.calculation_type,
+      length: productForm.calculation_type === 'SQFT' ? Number(productForm.length) : null,
+      width:  productForm.calculation_type === 'SQFT' ? Number(productForm.width)  : null,
+      updated_at: new Date().toISOString()
+    }
+    
+    const { data, error } = await supabase.from('products').insert(payload).select().single()
+    setSavingProduct(false)
+    if (error) { showToast('Save failed: ' + error.message, 'error'); return }
+    
+    showToast('Product added ✓')
+    setAllProducts(prev => {
+      const next = [...prev, data]
+      next.sort((a,b) => a.product_name.localeCompare(b.product_name))
+      return next
+    })
+    setShowProductModal(false)
+    selectProduct(data)
   }
 
   // ── Save item ──
@@ -563,32 +623,38 @@ export default function CreateEstimate() {
             {/* Product search */}
             <div className="field">
               <label>Product *</label>
-              <div className="autocomplete-wrap">
-                <input
-                  ref={productInputRef}
-                  value={productSearch}
-                  onChange={e => { setProductSearch(e.target.value); setShowSuggestions(true) }}
-                  onKeyDown={handleProductKeyDown}
-                  onFocus={() => setShowSuggestions(productSuggestions.length > 0)}
-                  onBlur={() => setTimeout(() => setShowSuggestions(false), 200)}
-                  placeholder="Type product name to search..."
-                  autoComplete="off"
-                />
-                {showSuggestions && productSuggestions.length > 0 && (
-                  <div className="autocomplete-list">
-                    {productSuggestions.map((p, i) => (
-                      <div key={p.id} className="autocomplete-item"
-                        style={suggestionIdx === i ? { background: 'var(--bg)', borderLeft: '3px solid var(--accent)' } : {}}
-                        onMouseDown={() => selectProduct(p)}>
-                        <div style={{ fontWeight: 600 }}>{p.product_name}</div>
-                        <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>
-                          {p.unit} · ₹{p.rate} · {p.calculation_type}
-                          {p.calculation_type === 'SQFT' && ` · ${p.length}×${p.width} ft`}
+              <div style={{ display: 'flex', gap: '8px', alignItems: 'flex-start' }}>
+                <div className="autocomplete-wrap" style={{ flex: 1 }}>
+                  <input
+                    ref={productInputRef}
+                    value={productSearch}
+                    onChange={e => { setProductSearch(e.target.value); setShowSuggestions(true) }}
+                    onKeyDown={handleProductKeyDown}
+                    onFocus={() => setShowSuggestions(productSuggestions.length > 0)}
+                    onBlur={() => setTimeout(() => setShowSuggestions(false), 200)}
+                    placeholder="Type product name to search..."
+                    autoComplete="off"
+                  />
+                  {showSuggestions && productSuggestions.length > 0 && (
+                    <div className="autocomplete-list">
+                      {productSuggestions.map((p, i) => (
+                        <div key={p.id} className="autocomplete-item"
+                          style={suggestionIdx === i ? { background: 'var(--bg)', borderLeft: '3px solid var(--accent)' } : {}}
+                          onMouseDown={() => selectProduct(p)}>
+                          <div style={{ fontWeight: 600 }}>{p.product_name}</div>
+                          <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>
+                            {p.unit} · ₹{p.rate} · {p.calculation_type}
+                            {p.calculation_type === 'SQFT' && ` · ${p.length}×${p.width} ft`}
+                          </div>
                         </div>
-                      </div>
-                    ))}
-                  </div>
-                )}
+                      ))}
+                    </div>
+                  )}
+                </div>
+                <button type="button" className="btn btn-secondary" style={{ padding: '0 12px', height: '42px', flexShrink: 0 }} onClick={() => {
+                  setProductForm({ ...EMPTY_PRODUCT_FORM, product_name: productSearch })
+                  setShowProductModal(true)
+                }}>+ New</button>
               </div>
             </div>
 
@@ -652,6 +718,64 @@ export default function CreateEstimate() {
               <button className="btn btn-secondary btn-full" onClick={() => setShowItemModal(false)}>Cancel</button>
               <button className="btn btn-primary btn-full" onClick={saveItem}>
                 {editingItemIdx !== null ? 'Update Item' : 'Add Item'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Create Product Modal ── */}
+      {showProductModal && (
+        <div className="modal-overlay" onClick={e => e.target === e.currentTarget && setShowProductModal(false)} style={{ zIndex: 1100 }}>
+          <div className="modal-box">
+            <div className="modal-title">
+              <span>Add New Product</span>
+              <button className="btn btn-ghost" onClick={() => setShowProductModal(false)}>✕</button>
+            </div>
+            <div className="field">
+              <label>Product Name *</label>
+              <input name="product_name" value={productForm.product_name} onChange={handleProductFormChange}
+                placeholder="e.g. C PLY 4 18 MM 7 x 4" style={{ textTransform: 'uppercase' }} />
+            </div>
+            <div className="field-row">
+              <div className="field">
+                <label>Unit *</label>
+                <select name="unit" value={productForm.unit} onChange={handleProductFormChange}>
+                  <option value="">Select unit</option>
+                  {UNITS.map(u => <option key={u} value={u}>{u}</option>)}
+                </select>
+              </div>
+              <div className="field">
+                <label>Calculation Type *</label>
+                <select name="calculation_type" value={productForm.calculation_type} onChange={handleProductFormChange}>
+                  <option value="QUANTITY">QUANTITY</option>
+                  <option value="SQFT">SQFT</option>
+                </select>
+              </div>
+            </div>
+            <div className="field">
+              <label>Rate (₹) *</label>
+              <input name="rate" type="number" inputMode="decimal"
+                value={productForm.rate} onChange={handleProductFormChange} placeholder="0.00" />
+            </div>
+            {productForm.calculation_type === 'SQFT' && (
+              <div className="field-row">
+                <div className="field">
+                  <label>Length (ft) *</label>
+                  <input name="length" type="number" inputMode="decimal"
+                    value={productForm.length} onChange={handleProductFormChange} placeholder="e.g. 7" />
+                </div>
+                <div className="field">
+                  <label>Width (ft) *</label>
+                  <input name="width" type="number" inputMode="decimal"
+                    value={productForm.width} onChange={handleProductFormChange} placeholder="e.g. 4" />
+                </div>
+              </div>
+            )}
+            <div style={{ display: 'flex', gap: 10, marginTop: 8 }}>
+              <button className="btn btn-secondary btn-full" onClick={() => setShowProductModal(false)}>Cancel</button>
+              <button className="btn btn-primary btn-full" onClick={handleProductSave} disabled={savingProduct}>
+                {savingProduct ? 'Saving...' : 'Add Product'}
               </button>
             </div>
           </div>
