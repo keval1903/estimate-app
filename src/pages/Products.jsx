@@ -116,7 +116,8 @@ export default function Products() {
       const cols = line.split(/,|\t/).map(c => c.trim().replace(/^"|"$/g, ''))
       if (cols.length < 3) continue
       const [product_name, length, width, unit, rate, calculation_type] = cols
-      if (!product_name || !unit || !rate) continue
+      if (product_name.toLowerCase().includes('product') && rate?.toLowerCase().includes('rate')) continue
+      if (isNaN(Number(rate)) || !product_name || !unit) continue
       const calcType = calculation_type?.toUpperCase().trim() === 'SQFT' ? 'SQFT' : 'QUANTITY'
       rows.push({
         product_name: product_name.toUpperCase(),
