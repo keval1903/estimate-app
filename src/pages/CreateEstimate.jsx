@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, useCallback } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 import { useToast } from '../hooks/useToast.jsx'
+import { getMergedUnits } from '../constants/units.js'
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 function todayIST() {
@@ -106,6 +107,7 @@ export default function CreateEstimate() {
   // new product state
   const [showProductModal, setShowProductModal] = useState(false)
   const [productForm, setProductForm] = useState(EMPTY_PRODUCT_FORM)
+  const [showProductCustomUnit, setShowProductCustomUnit] = useState(false)
   const [savingProduct, setSavingProduct] = useState(false)
 
   // site autocomplete
@@ -307,6 +309,12 @@ export default function CreateEstimate() {
   }
 
   // ── Open item modal ──
+  function openAddProductModal() {
+    setProductForm(EMPTY_PRODUCT_FORM)
+    setShowProductCustomUnit(false)
+    setShowProductModal(true)
+  }
+
   function openAddItem() {
     setItemForm(EMPTY_ITEM)
     setProductSearch('')
@@ -956,10 +964,26 @@ export default function CreateEstimate() {
             <div className="field-row">
               <div className="field">
                 <label>Unit *</label>
-                <select name="unit" value={productForm.unit} onChange={handleProductFormChange}>
-                  <option value="">Select unit</option>
-                  {UNITS.map(u => <option key={u} value={u}>{u}</option>)}
-                </select>
+                {!showProductCustomUnit ? (
+                  <select name="unit" value={productForm.unit} onChange={e => {
+                    if (e.target.value === 'ADD_CUSTOM') {
+                      setShowProductCustomUnit(true)
+                      setProductForm(f => ({ ...f, unit: '' }))
+                    } else {
+                      handleProductFormChange(e)
+                    }
+                  }}>
+                    <option value="">Select unit</option>
+                    {getMergedUnits(allProducts).map(u => <option key={u} value={u}>{u}</option>)}
+                    <option value="ADD_CUSTOM">➕ Add Custom Unit...</option>
+                  </select>
+                ) : (
+                  <div style={{ display: 'flex', gap: 6 }}>
+                    <input name="unit" value={productForm.unit} onChange={handleProductFormChange}
+                      placeholder="Type custom unit (e.g. Sheet, Gram, Dozen)" autoFocus />
+                    <button className="btn btn-ghost btn-sm" type="button" onClick={() => setShowProductCustomUnit(false)}>✕</button>
+                  </div>
+                )}
               </div>
               <div className="field">
                 <label>Calculation Type *</label>
