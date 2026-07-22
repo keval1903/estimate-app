@@ -4,6 +4,7 @@ import Products from './pages/Products'
 import EstimateList from './pages/EstimateList'
 import CreateEstimate from './pages/CreateEstimate'
 import EstimateView from './pages/EstimateView'
+import StockReport from './pages/StockReport'
 
 export default function App() {
   return (
@@ -15,6 +16,7 @@ export default function App() {
         <Route path="/estimate/new"       element={<CreateEstimate />} />
         <Route path="/estimate/edit/:id"  element={<CreateEstimate />} />
         <Route path="/estimate/view/:id"  element={<EstimateView />} />
+        <Route path="/stock-report"       element={<StockReport />} />
       </Routes>
     </BrowserRouter>
   )

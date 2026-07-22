@@ -6,7 +6,7 @@ import { useToast } from '../hooks/useToast.jsx'
 const EMPTY_FORM = {
   product_name: '', length: '', width: '',
   unit: '', rate: '', calculation_type: 'QUANTITY',
-  has_stock: false, stock: ''
+  has_stock: false, stock: '', add_stock: '', min_stock: '5'
 }
 const UNITS = ['Sq.Ft', 'Nos.', 'Kg.', 'Bundle', 'Rmt', 'Ltr', 'Pkt', 'Box', 'Set', 'Pair']
 
@@ -19,6 +19,7 @@ export default function Products() {
   const [showModal, setShowModal] = useState(false)
   const [showImport, setShowImport] = useState(false)
   const [editingId, setEditingId] = useState(null)
+  const [stockMode, setStockMode] = useState('ADD') // 'ADD' or 'SET'
   const [form, setForm] = useState(EMPTY_FORM)
   const [saving, setSaving] = useState(false)
   const [deleteConfirm, setDeleteConfirm] = useState(null)
@@ -28,6 +29,16 @@ export default function Products() {
   const fileRef = useRef()
 
   useEffect(() => { fetchProducts() }, [])
+
+  useEffect(() => {
+    if (products.length > 0) {
+      const editId = new URLSearchParams(window.location.search).get('editId')
+      if (editId) {
+        const p = products.find(prod => prod.id === editId)
+        if (p) openEdit(p)
+      }
+    }
+  }, [products])
 
   async function fetchProducts() {
     setLoading(true)
@@ -42,16 +53,17 @@ export default function Products() {
     p.unit.toLowerCase().includes(search.toLowerCase())
   )
 
-  function openAdd() { setForm(EMPTY_FORM); setEditingId(null); setShowModal(true) }
+  function openAdd() { setForm(EMPTY_FORM); setEditingId(null); setStockMode('SET'); setShowModal(true) }
 
   function openEdit(p) {
     setForm({
       product_name: p.product_name, length: p.length ?? '',
       width: p.width ?? '', unit: p.unit, rate: p.rate,
       calculation_type: p.calculation_type,
-      has_stock: p.has_stock || false, stock: p.stock ?? ''
+      has_stock: p.has_stock || false, stock: p.stock ?? '', add_stock: '',
+      min_stock: p.min_stock ?? 5
     })
-    setEditingId(p.id); setShowModal(true)
+    setEditingId(p.id); setStockMode('ADD'); setShowModal(true)
   }
 
   function handleFormChange(e) {
@@ -69,12 +81,16 @@ export default function Products() {
     if (!form.product_name.trim()) return 'Product name is required'
     if (!form.unit.trim()) return 'Unit is required'
     if (!form.rate || isNaN(form.rate) || Number(form.rate) < 0) return 'Valid rate is required'
-    if (form.calculation_type === 'SQFT') {
-      if (!form.length || isNaN(form.length)) return 'Length required for Sq.Ft products'
-      if (!form.width  || isNaN(form.width))  return 'Width required for Sq.Ft products'
+    if (form.calculation_type === 'SQFT' || form.calculation_type === 'INCH') {
+      if (!form.length || isNaN(form.length)) return 'Length is required'
+      if (!form.width  || isNaN(form.width))  return 'Width is required'
     }
     if (form.has_stock) {
-      if (form.stock === '' || isNaN(form.stock)) return 'Valid stock amount is required'
+      if (editingId && stockMode === 'ADD') {
+        if (form.add_stock === '' || isNaN(form.add_stock) || Number(form.add_stock) <= 0) return 'Valid quantity to add is required'
+      } else {
+        if (form.stock === '' || isNaN(form.stock)) return 'Valid stock amount is required'
+      }
     }
     return null
   }
@@ -83,27 +99,39 @@ export default function Products() {
     const err = validate()
     if (err) { showToast(err, 'error'); return }
     setSaving(true)
-    const payload = {
-      product_name: form.product_name.trim().toUpperCase(),
-      unit: form.unit.trim(), rate: Number(form.rate),
-      calculation_type: form.calculation_type,
-      length: form.calculation_type === 'SQFT' ? Number(form.length) : null,
-      width:  form.calculation_type === 'SQFT' ? Number(form.width)  : null,
-      has_stock: form.has_stock,
-      stock: form.has_stock ? Number(form.stock) : 0,
-      updated_at: new Date().toISOString()
-    }
     let error, data
     let targetId = editingId
     let oldStock = 0
 
     // If not editing, check for existing product by name to update instead of insert
     if (!targetId) {
-      const existing = products.find(p => p.product_name.toLowerCase() === payload.product_name.toLowerCase())
+      const existing = products.find(p => p.product_name.toLowerCase() === form.product_name.trim().toLowerCase())
       if (existing) { targetId = existing.id; oldStock = existing.stock || 0 }
     } else {
       const existing = products.find(p => p.id === targetId)
       if (existing) oldStock = existing.stock || 0
+    }
+
+    let calculatedStock = 0
+    if (form.has_stock) {
+      if (targetId && stockMode === 'ADD') {
+        calculatedStock = Number(oldStock) + Number(form.add_stock)
+      } else {
+        calculatedStock = Number(form.stock)
+      }
+    }
+
+    const isDimensionBased = form.calculation_type === 'SQFT' || form.calculation_type === 'INCH'
+    const payload = {
+      product_name: form.product_name.trim().toUpperCase(),
+      unit: form.unit.trim(), rate: Number(form.rate),
+      calculation_type: form.calculation_type,
+      length: isDimensionBased && form.length ? Number(form.length) : null,
+      width:  isDimensionBased && form.width  ? Number(form.width)  : null,
+      has_stock: form.has_stock,
+      stock: calculatedStock,
+      min_stock: form.has_stock ? Number(form.min_stock || 5) : 5,
+      updated_at: new Date().toISOString()
     }
 
     if (targetId) {
@@ -260,6 +288,9 @@ export default function Products() {
         <div style={{ display: 'flex', gap: '8px' }}>
           <button className="btn btn-sm"
             style={{ background: 'rgba(255,255,255,0.2)', color: '#fff', border: '1px solid rgba(255,255,255,0.4)' }}
+            onClick={() => navigate('/stock-report')}>📊 Report</button>
+          <button className="btn btn-sm"
+            style={{ background: 'rgba(255,255,255,0.2)', color: '#fff', border: '1px solid rgba(255,255,255,0.4)' }}
             onClick={handleExport}>⬇ Export</button>
           <button className="btn btn-sm"
             style={{ background: 'rgba(255,255,255,0.2)', color: '#fff', border: '1px solid rgba(255,255,255,0.4)' }}
@@ -311,10 +342,10 @@ export default function Products() {
             <div className="item-grid" style={{ marginTop:8, marginLeft: 26 }}>
               <div><span style={{ color:'var(--text-muted)', fontSize:12 }}>UNIT</span><br />{p.unit}</div>
               <div><span style={{ color:'var(--text-muted)', fontSize:12 }}>RATE</span><br />₹{Number(p.rate).toFixed(2)}</div>
-              {p.calculation_type === 'SQFT' && (
+              {(p.calculation_type === 'SQFT' || p.calculation_type === 'INCH') && (p.length || p.width) && (
                 <>
-                  <div><span style={{ color:'var(--text-muted)', fontSize:12 }}>LENGTH</span><br />{p.length} ft</div>
-                  <div><span style={{ color:'var(--text-muted)', fontSize:12 }}>WIDTH</span><br />{p.width} ft</div>
+                  <div><span style={{ color:'var(--text-muted)', fontSize:12 }}>LENGTH</span><br />{p.length} {p.calculation_type === 'INCH' ? 'in' : 'ft'}</div>
+                  <div><span style={{ color:'var(--text-muted)', fontSize:12 }}>WIDTH</span><br />{p.width} {p.calculation_type === 'INCH' ? 'in' : 'ft'}</div>
                 </>
               )}
               {p.has_stock && (
@@ -364,7 +395,8 @@ export default function Products() {
                 <label>Calculation Type *</label>
                 <select name="calculation_type" value={form.calculation_type} onChange={handleFormChange}>
                   <option value="QUANTITY">QUANTITY</option>
-                  <option value="SQFT">SQFT</option>
+                  <option value="SQFT">SQFT (L x W x Nos)</option>
+                  <option value="INCH">INCH (L x W x Nos x Rate)</option>
                 </select>
               </div>
             </div>
@@ -373,17 +405,17 @@ export default function Products() {
               <input name="rate" type="number" inputMode="decimal"
                 value={form.rate} onChange={handleFormChange} placeholder="0.00" />
             </div>
-            {form.calculation_type === 'SQFT' && (
+            {(form.calculation_type === 'SQFT' || form.calculation_type === 'INCH') && (
               <div className="field-row">
                 <div className="field">
-                  <label>Length (ft) *</label>
+                  <label>Length ({form.calculation_type === 'INCH' ? 'in' : 'ft'}) *</label>
                   <input name="length" type="number" inputMode="decimal"
-                    value={form.length} onChange={handleFormChange} placeholder="e.g. 7" />
+                    value={form.length} onChange={handleFormChange} placeholder="e.g. 12" />
                 </div>
                 <div className="field">
-                  <label>Width (ft) *</label>
+                  <label>Width ({form.calculation_type === 'INCH' ? 'in' : 'ft'}) *</label>
                   <input name="width" type="number" inputMode="decimal"
-                    value={form.width} onChange={handleFormChange} placeholder="e.g. 4" />
+                    value={form.width} onChange={handleFormChange} placeholder="e.g. 8" />
                 </div>
               </div>
             )}
@@ -395,9 +427,57 @@ export default function Products() {
             </div>
             {form.has_stock && (
               <div className="field">
-                <label>Current Stock *</label>
-                <input name="stock" type="number" inputMode="decimal"
-                  value={form.stock} onChange={handleFormChange} placeholder="e.g. 100" />
+                {editingId && (
+                  <div style={{ display: 'flex', gap: 8, marginBottom: 10 }}>
+                    <button
+                      type="button"
+                      className={`btn btn-sm ${stockMode === 'ADD' ? 'btn-primary' : 'btn-secondary'}`}
+                      onClick={() => setStockMode('ADD')}
+                      style={{ flex: 1 }}
+                    >
+                      ➕ Add Stock (+)
+                    </button>
+                    <button
+                      type="button"
+                      className={`btn btn-sm ${stockMode === 'SET' ? 'btn-primary' : 'btn-secondary'}`}
+                      onClick={() => setStockMode('SET')}
+                      style={{ flex: 1 }}
+                    >
+                      ✏️ Set Exact (=)
+                    </button>
+                  </div>
+                )}
+
+                {editingId && stockMode === 'ADD' ? (
+                  <>
+                    <label>Quantity to Add (+)</label>
+                    <input name="add_stock" type="number" inputMode="decimal"
+                      value={form.add_stock} onChange={handleFormChange} placeholder="e.g. 10 to add 10 more" />
+                    <div style={{ fontSize: 13, color: 'var(--accent)', marginTop: 6, fontWeight: 700 }}>
+                      Current: {form.stock || 0} → New Total: {Number(form.stock || 0) + (Number(form.add_stock) || 0)} {form.unit}
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <label>{editingId ? 'Set Total Stock (=)' : 'Current Stock *'}</label>
+                    <input name="stock" type="number" inputMode="decimal"
+                      value={form.stock} onChange={handleFormChange} placeholder="e.g. 100" />
+                    {editingId && (
+                      <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 4 }}>
+                        Current Stock in system: {form.stock || 0} {form.unit}
+                      </div>
+                    )}
+                  </>
+                )}
+
+                <div style={{ marginTop: 12 }}>
+                  <label>Minimum Stock Level * (Reorder Alert Limit)</label>
+                  <input name="min_stock" type="number" inputMode="decimal"
+                    value={form.min_stock} onChange={handleFormChange} placeholder="e.g. 5" />
+                  <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 4 }}>
+                    Alert is triggered when stock falls below this quantity
+                  </div>
+                </div>
               </div>
             )}
             <div style={{ display:'flex', gap:10, marginTop:8 }}>

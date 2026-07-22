@@ -13,6 +13,10 @@ export default function EstimateList() {
   const [deleting, setDeleting] = useState(false)
   const [selectedIds, setSelectedIds] = useState(new Set())
   const [collapsedDates, setCollapsedDates] = useState(new Set())
+  const [activeTab, setActiveTab] = useState(() => {
+    const p = new URLSearchParams(window.location.search).get('tab')
+    return p === 'quotations' ? 'QUOTATION' : 'ESTIMATE'
+  })
 
   const fetchEstimates = useCallback(async () => {
     setLoading(true)
@@ -31,11 +35,17 @@ export default function EstimateList() {
       }
     }
 
+    if (activeTab === 'QUOTATION') {
+      query = query.eq('type', 'QUOTATION')
+    } else {
+      query = query.or('type.eq.ESTIMATE,type.is.null')
+    }
+
     const { data, error } = await query
-    if (error) showToast('Failed to load estimates', 'error')
+    if (error) showToast('Failed to load records', 'error')
     else setEstimates(data || [])
     setLoading(false)
-  }, [search])
+  }, [search, activeTab])
 
   useEffect(() => {
     const t = setTimeout(fetchEstimates, 300)
@@ -127,15 +137,33 @@ export default function EstimateList() {
     <div className="app-container">
       <div className="top-nav">
         <button className="nav-back" onClick={() => navigate('/')}>←</button>
-        <span className="nav-title">Previous Estimates</span>
+        <span className="nav-title">{activeTab === 'QUOTATION' ? 'Previous Quotations' : 'Previous Estimates'}</span>
       </div>
 
       <div className="page">
+        {/* Tabs */}
+        <div style={{ display: 'flex', gap: 8, marginBottom: 14 }}>
+          <button
+            className={`btn btn-sm ${activeTab === 'ESTIMATE' ? 'btn-primary' : 'btn-secondary'}`}
+            style={{ flex: 1 }}
+            onClick={() => setActiveTab('ESTIMATE')}
+          >
+            📄 Estimates ({activeTab === 'ESTIMATE' ? estimates.length : 'Bills'})
+          </button>
+          <button
+            className={`btn btn-sm ${activeTab === 'QUOTATION' ? 'btn-primary' : 'btn-secondary'}`}
+            style={{ flex: 1 }}
+            onClick={() => setActiveTab('QUOTATION')}
+          >
+            📜 Quotations ({activeTab === 'QUOTATION' ? estimates.length : 'Quotes'})
+          </button>
+        </div>
+
         {/* Search */}
         <div className="search-bar">
           <span>🔍</span>
           <input
-            placeholder="Search by bill number or site name..."
+            placeholder={`Search ${activeTab === 'QUOTATION' ? 'quotations' : 'estimates'} by number or site...`}
             value={search}
             onChange={e => setSearch(e.target.value)}
           />

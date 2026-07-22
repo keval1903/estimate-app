@@ -12,9 +12,15 @@ CREATE TABLE IF NOT EXISTS products (
   unit TEXT NOT NULL DEFAULT 'Nos.',
   rate NUMERIC(12,2) NOT NULL DEFAULT 0,
   calculation_type TEXT NOT NULL DEFAULT 'QUANTITY',
+  has_stock BOOLEAN DEFAULT FALSE,
+  stock NUMERIC(12,2) DEFAULT 0,
+  min_stock NUMERIC(12,2) DEFAULT 5,
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
+
+-- Migration for existing database:
+ALTER TABLE products ADD COLUMN IF NOT EXISTS min_stock NUMERIC(12,2) DEFAULT 5;
 
 -- 2. SITES TABLE (for site name autocomplete)
 CREATE TABLE IF NOT EXISTS sites (
@@ -32,13 +38,30 @@ CREATE TABLE IF NOT EXISTS estimates (
   bill_number INTEGER NOT NULL UNIQUE,
   bill_date TEXT NOT NULL,
   transport TEXT,
+  client_name TEXT,
+  client_mobile TEXT,
+  prepared_by TEXT,
   site_name TEXT,
+  type TEXT NOT NULL DEFAULT 'ESTIMATE',
   total_nos NUMERIC(12,2) DEFAULT 0,
   total_quantity NUMERIC(12,2) DEFAULT 0,
   grand_total NUMERIC(12,2) DEFAULT 0,
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
+
+-- Migration for existing database:
+ALTER TABLE estimates ADD COLUMN IF NOT EXISTS type TEXT NOT NULL DEFAULT 'ESTIMATE';
+ALTER TABLE estimates ADD COLUMN IF NOT EXISTS client_name TEXT;
+ALTER TABLE estimates ADD COLUMN IF NOT EXISTS client_mobile TEXT;
+ALTER TABLE estimates ADD COLUMN IF NOT EXISTS prepared_by TEXT;
+
+-- Update CHECK constraints to allow 'INCH' calculation type
+ALTER TABLE products DROP CONSTRAINT IF EXISTS products_calculation_type_check;
+ALTER TABLE products ADD CONSTRAINT products_calculation_type_check CHECK (calculation_type IN ('SQFT', 'INCH', 'QUANTITY'));
+
+ALTER TABLE estimate_items DROP CONSTRAINT IF EXISTS estimate_items_calculation_type_snapshot_check;
+ALTER TABLE estimate_items ADD CONSTRAINT estimate_items_calculation_type_snapshot_check CHECK (calculation_type_snapshot IN ('SQFT', 'INCH', 'QUANTITY'));
 
 -- 5. ESTIMATE ITEMS TABLE (snapshots of product at time of estimate)
 CREATE TABLE IF NOT EXISTS estimate_items (
@@ -55,8 +78,12 @@ CREATE TABLE IF NOT EXISTS estimate_items (
   rate NUMERIC(12,2) NOT NULL,
   calculation_type_snapshot TEXT NOT NULL DEFAULT 'QUANTITY',
   amount NUMERIC(12,2) NOT NULL DEFAULT 0,
+  remark TEXT,
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
+
+-- Migration for existing database:
+ALTER TABLE estimate_items ADD COLUMN IF NOT EXISTS remark TEXT;
 
 -- 6. SAFE BILL NUMBER FUNCTION (atomic, no duplicates)
 CREATE OR REPLACE FUNCTION get_next_bill_number()

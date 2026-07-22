@@ -13,6 +13,7 @@ export default function EstimateView() {
   const [exporting, setExporting] = useState('')
   const [paperSize, setPaperSize] = useState('a5')
   const [layoutMode, setLayoutMode] = useState('full')
+  const [converting, setConverting] = useState(false)
   const previewRef = useRef()
 
   useEffect(() => {
@@ -35,7 +36,14 @@ export default function EstimateView() {
   }
 
   function getSummaryText() {
-    return `Estimate No. ${estimate.bill_number}\nDate: ${estimate.bill_date}\nSite: ${estimate.site_name}${estimate.transport ? '\nTransport: ' + estimate.transport : ''}\nGrand Total: ₹${Number(estimate.grand_total).toLocaleString('en-IN', { minimumFractionDigits: 2 })}`
+    const isQuote = estimate?.type === 'QUOTATION'
+    const client = estimate?.client_name || estimate?.transport || ''
+    let text = `${isQuote ? 'Quotation' : 'Estimate'} No. ${estimate?.bill_number}\nDate: ${estimate?.bill_date}\nSite: ${estimate?.site_name}`
+    if (client) text += `\nClient: ${client}`
+    if (estimate?.client_mobile) text += `\nM.: ${estimate.client_mobile}`
+    if (estimate?.prepared_by) text += `\nPrep. By: ${estimate.prepared_by}`
+    text += `\nGrand Total: ₹${Number(estimate?.grand_total || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}`
+    return text
   }
 
   async function generateCanvas(scale) {
@@ -158,6 +166,62 @@ export default function EstimateView() {
     window.open(`https://wa.me/?text=${encodeURIComponent(text)}`, '_blank')
   }
 
+  async function handleConvertToEstimate() {
+    if (!window.confirm('Convert this Quotation to an Estimate? Stock will be deducted.')) return
+    setConverting(true)
+    try {
+      const { data: allProducts } = await supabase.from('products').select('*')
+      const prodMap = {}
+      for (const p of (allProducts || [])) prodMap[p.id] = p
+
+      // 1. Check stock sufficiency for all items first
+      for (const it of items) {
+        if (it.product_id && prodMap[it.product_id] && prodMap[it.product_id].has_stock) {
+          const p = prodMap[it.product_id]
+          const reqQty = it.calculation_type_snapshot === 'SQFT' ? (parseFloat(it.nos) || 0) : (parseFloat(it.quantity) || 0)
+          const avail = Number(p.stock || 0)
+          if (reqQty > avail) {
+            showToast(`Cannot convert! Insufficient stock for ${p.product_name}. Required: ${reqQty} ${p.unit}, Available: ${avail} ${p.unit}.`, 'error')
+            setConverting(false)
+            return
+          }
+        }
+      }
+
+      // 2. Perform stock deduction
+      for (const it of items) {
+        if (it.product_id && prodMap[it.product_id] && prodMap[it.product_id].has_stock) {
+          const qty = it.calculation_type_snapshot === 'SQFT' ? (parseFloat(it.nos) || 0) : (parseFloat(it.quantity) || 0)
+          if (qty > 0) {
+            const p = prodMap[it.product_id]
+            const newStock = Number(p.stock) - qty
+            await supabase.from('products').update({ stock: newStock }).eq('id', p.id)
+            await supabase.from('stock_history').insert({
+              product_id: p.id,
+              change_type: 'QUOTATION_CONVERT',
+              quantity_changed: -qty,
+              estimate_id: id
+            })
+          }
+        }
+      }
+
+      const { error } = await supabase.from('estimates').update({
+        type: 'ESTIMATE',
+        updated_at: new Date().toISOString()
+      }).eq('id', id)
+
+      if (error) throw error
+
+      setEstimate(prev => ({ ...prev, type: 'ESTIMATE' }))
+      showToast('Converted to Estimate & Stock Deducted ✓')
+    } catch (e) {
+      showToast('Conversion failed: ' + e.message, 'error')
+    } finally {
+      setConverting(false)
+    }
+  }
+
   if (loading) return <div className="app-container"><div className="spinner" /></div>
   if (!estimate) return (
     <div className="app-container">
@@ -174,7 +238,7 @@ export default function EstimateView() {
       {/* Nav */}
       <div className="top-nav no-print">
         <button className="nav-back" onClick={() => navigate('/estimates')}>←</button>
-        <span className="nav-title">Bill #{estimate.bill_number}</span>
+        <span className="nav-title">{estimate.type === 'QUOTATION' ? 'Quotation' : 'Estimate'} #{estimate.bill_number}</span>
       </div>
 
       {/* Action buttons */}
@@ -190,6 +254,12 @@ export default function EstimateView() {
           </select>
         </div>
         
+        {estimate.type === 'QUOTATION' && (
+          <button className="btn btn-warning btn-sm"
+            onClick={handleConvertToEstimate} disabled={converting}>
+            {converting ? 'Converting...' : '⚡ Convert to Estimate'}
+          </button>
+        )}
         <button className="btn btn-secondary btn-sm"
           onClick={() => navigate(`/estimate/edit/${id}`)}>✏️ Edit</button>
         <button className="btn btn-primary btn-sm"
@@ -224,22 +294,23 @@ export default function EstimateView() {
               {/* Title row */}
               <tr>
                 <td colSpan={6} style={{ textAlign: 'center', fontSize: 13, fontWeight: 700, letterSpacing: 2, padding: '6px 0', borderBottom: '1px solid #000' }}>
-                  B I L L
+                  {estimate.type === 'QUOTATION' ? 'Q U O T A T I O N' : 'E S T I M A T E'}
                 </td>
               </tr>
 
               {/* Meta details */}
               <tr>
-                {/* Left side: Site & Transport */}
+                {/* Left side: Site, Client & Mobile */}
                 <td colSpan={3} style={{ padding: '6px 10px', verticalAlign: 'top', borderBottom: '1px solid #000', borderRight: '1px solid #000' }}>
                   <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
                     <tbody>
                       {[
                         ['Site', estimate.site_name],
-                        ['Transport', estimate.transport || ''],
+                        ['Client', estimate.client_name || estimate.transport || ''],
+                        ['M.', estimate.client_mobile || ''],
                       ].map(([label, val]) => (
                         <tr key={label}>
-                          <td style={{ width: 64, fontWeight: 600, paddingBottom: 2 }}>{label}</td>
+                          <td style={{ width: 52, fontWeight: 600, paddingBottom: 2 }}>{label}</td>
                           <td style={{ width: 10, paddingBottom: 2 }}>:</td>
                           <td style={{ fontWeight: label === 'Site' ? 700 : 400, paddingBottom: 2 }}>{val}</td>
                         </tr>
@@ -247,16 +318,17 @@ export default function EstimateView() {
                     </tbody>
                   </table>
                 </td>
-                {/* Right side: Date & No. */}
+                {/* Right side: Date, No. & Prepared By */}
                 <td colSpan={3} style={{ padding: '6px 10px', verticalAlign: 'top', borderBottom: '1px solid #000' }}>
                   <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
                     <tbody>
                       {[
                         ['Date', estimate.bill_date],
                         ['No.', estimate.bill_number],
+                        ['Prep. By', estimate.prepared_by || ''],
                       ].map(([label, val]) => (
                         <tr key={label}>
-                          <td style={{ width: 44, fontWeight: 600, paddingBottom: 2 }}>{label}</td>
+                          <td style={{ width: 68, fontWeight: 600, paddingBottom: 2 }}>{label}</td>
                           <td style={{ width: 10, paddingBottom: 2 }}>:</td>
                           <td style={{ fontWeight: 400, paddingBottom: 2 }}>{val}</td>
                         </tr>
@@ -283,7 +355,9 @@ export default function EstimateView() {
               {items.map(it => (
                 <tr key={it.id}>
                   <td style={{ border: '1px solid #000', padding: '8px 6px', textAlign: 'center', fontSize: 12 }}>{it.serial_number}</td>
-                  <td style={{ border: '1px solid #000', padding: '8px 6px', fontSize: 12 }}>{it.product_name_snapshot}</td>
+                  <td style={{ border: '1px solid #000', padding: '8px 6px', fontSize: 12 }}>
+                    {it.product_name_snapshot}{it.remark ? ` - ${it.remark}` : ''}
+                  </td>
                   <td style={{ border: '1px solid #000', padding: '8px 6px', textAlign: 'center', fontSize: 12 }}>
                     {it.calculation_type_snapshot === 'SQFT' ? it.nos : ''}
                   </td>
@@ -300,7 +374,7 @@ export default function EstimateView() {
               ))}
 
               {/* Empty padding rows */}
-              {Array.from({ length: layoutMode === 'compact' ? 2 : Math.max(0, (paperSize === 'a5' ? 15 : 30) - items.length) }).map((_, i) => (
+              {Array.from({ length: layoutMode === 'compact' ? 2 : Math.max(0, (paperSize === 'a5' ? 17 : 34) - items.length) }).map((_, i) => (
                 <tr key={`empty-${i}`}>
                   <td style={{ border: '1px solid #000', height: 35 }}>&nbsp;</td>
                   <td style={{ border: '1px solid #000' }} />
@@ -353,7 +427,7 @@ export default function EstimateView() {
           }
           #estimate-preview {
             max-width: none !important;
-            padding: 0 !important;
+            padding: 4mm 4mm 0 4mm !important;
           }
           #estimate-preview table {
             width: 100% !important;

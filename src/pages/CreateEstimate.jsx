@@ -14,14 +14,22 @@ function todayIST() {
 }
 
 function calcItem(item) {
+  const rate = parseFloat(item.rate) || 0
   const nos = parseFloat(item.nos) || 0
   const qty = parseFloat(item.quantity) || 0
-  const rate = parseFloat(item.rate) || 0
-  const L = parseFloat(item.length_snapshot) || 0
-  const W = parseFloat(item.width_snapshot) || 0
+  const L = parseFloat(item.length_snapshot)
+  const W = parseFloat(item.width_snapshot)
   if (item.calculation_type_snapshot === 'SQFT') {
-    const quantity = L * W * nos
+    const lVal = isNaN(L) ? 0 : L
+    const wVal = isNaN(W) ? 0 : W
+    const quantity = lVal * wVal * nos
     const amount = quantity * rate
+    return { quantity: +quantity.toFixed(2), amount: +amount.toFixed(2) }
+  } else if (item.calculation_type_snapshot === 'INCH') {
+    const lVal = isNaN(L) || L <= 0 ? 1 : L
+    const wVal = isNaN(W) || W <= 0 ? 1 : W
+    const amount = lVal * wVal * nos * rate
+    const quantity = nos
     return { quantity: +quantity.toFixed(2), amount: +amount.toFixed(2) }
   } else {
     const amount = qty * rate
@@ -32,9 +40,11 @@ function calcItem(item) {
 function calcTotals(items) {
   let total_nos = 0, total_quantity = 0, grand_total = 0
   for (const it of items) {
+    const fresh = calcItem(it)
+    const amt = fresh.amount ?? parseFloat(it.amount) ?? 0
     total_nos      += parseFloat(it.nos) || 0
     total_quantity += parseFloat(it.quantity) || 0
-    grand_total    += parseFloat(it.amount) || 0
+    grand_total    += amt
   }
   return {
     total_nos: +total_nos.toFixed(2),
@@ -48,7 +58,7 @@ const EMPTY_ITEM = {
   length_snapshot: null, width_snapshot: null,
   nos: '', quantity: '', unit_snapshot: '',
   rate: '', calculation_type_snapshot: 'QUANTITY', amount: 0,
-  has_stock: false, stock: 0
+  has_stock: false, stock: 0, remark: ''
 }
 
 const EMPTY_PRODUCT_FORM = {
@@ -65,9 +75,14 @@ export default function CreateEstimate() {
   const isEdit = Boolean(id)
   const { showToast, ToastEl } = useToast()
 
-  // form state
+  const [docType, setDocType] = useState(() => {
+    const p = new URLSearchParams(window.location.search).get('type')
+    return p === 'ESTIMATE' ? 'ESTIMATE' : 'QUOTATION'
+  })
   const [billDate, setBillDate] = useState(todayIST())
-  const [transport, setTransport] = useState('')
+  const [clientName, setClientName] = useState('')
+  const [clientMobile, setClientMobile] = useState('')
+  const [preparedBy, setPreparedBy] = useState('')
   const [siteName, setSiteName] = useState('')
   const [items, setItems] = useState([])
   const [originalItems, setOriginalItems] = useState([])
@@ -136,8 +151,11 @@ export default function CreateEstimate() {
           setTimeout(() => showToast('Unsaved draft restored'), 500)
         } else {
           setBillDate(est.bill_date)
-          setTransport(est.transport || '')
+          setClientName(est.client_name || est.transport || '')
+          setClientMobile(est.client_mobile || '')
+          setPreparedBy(est.prepared_by || '')
           setSiteName(est.site_name || '')
+          setDocType(est.type || 'ESTIMATE')
           const { data: eitems } = await supabase
             .from('estimate_items').select('*')
             .eq('estimate_id', id).order('serial_number')
@@ -152,7 +170,8 @@ export default function CreateEstimate() {
             unit_snapshot: it.unit_snapshot,
             rate: it.rate,
             calculation_type_snapshot: it.calculation_type_snapshot,
-            amount: it.amount
+            amount: it.amount,
+            remark: it.remark || ''
           }))
           setItems(loadedItems)
           setOriginalItems(loadedItems)
@@ -162,7 +181,9 @@ export default function CreateEstimate() {
       } else {
         if (parsedDraft) {
           setBillDate(parsedDraft.billDate)
-          setTransport(parsedDraft.transport || '')
+          setClientName(parsedDraft.clientName || parsedDraft.transport || '')
+          setClientMobile(parsedDraft.clientMobile || '')
+          setPreparedBy(parsedDraft.preparedBy || '')
           setSiteName(parsedDraft.siteName || '')
           setItems(parsedDraft.items || [])
           setTimeout(() => showToast('Unsaved draft restored'), 500)
@@ -175,10 +196,12 @@ export default function CreateEstimate() {
 
   // ── Auto-save draft ──
   useEffect(() => {
-    if (loading) return // don't save while initial load is happening
-    const draft = { billDate, transport, siteName, items }
-    localStorage.setItem(draftKey, JSON.stringify(draft))
-  }, [billDate, transport, siteName, items, draftKey, loading])
+    if (!loading) {
+      localStorage.setItem(draftKey, JSON.stringify({
+        billDate, clientName, clientMobile, preparedBy, siteName, items
+      }))
+    }
+  }, [billDate, clientName, clientMobile, preparedBy, siteName, items, draftKey, loading])
 
   // ── Recalc totals when items change ──
   useEffect(() => { setTotals(calcTotals(items)) }, [items])
@@ -208,6 +231,7 @@ export default function CreateEstimate() {
 
   // ── Select a product from suggestions ──
   function selectProduct(p) {
+    const isPieceBased = p.calculation_type === 'SQFT' || p.calculation_type === 'INCH'
     setItemForm(f => {
       const next = {
         ...f,
@@ -218,8 +242,8 @@ export default function CreateEstimate() {
         unit_snapshot: p.unit,
         rate: p.rate,
         calculation_type_snapshot: p.calculation_type,
-        nos: p.calculation_type === 'SQFT' ? (f.nos || '') : '',
-        quantity: p.calculation_type === 'QUANTITY' ? (f.quantity || '') : '',
+        nos: isPieceBased ? (f.nos || '') : '',
+        quantity: p.calculation_type === 'QUANTITY' ? (f.quantity || '') : (f.nos || ''),
         amount: 0,
         has_stock: p.has_stock || false,
         stock: p.stock || 0
@@ -236,7 +260,7 @@ export default function CreateEstimate() {
     setSuggestionIdx(-1)
 
     setTimeout(() => {
-      if (p.calculation_type === 'SQFT') nosInputRef.current?.focus()
+      if (isPieceBased) nosInputRef.current?.focus()
       else qtyInputRef.current?.focus()
     }, 50)
   }
@@ -274,6 +298,8 @@ export default function CreateEstimate() {
       const { quantity, amount } = calcItem(next)
       if (next.calculation_type_snapshot === 'SQFT') {
         next.quantity = quantity
+      } else if (next.calculation_type_snapshot === 'INCH') {
+        next.quantity = parseFloat(next.nos) || 0
       }
       next.amount = amount
       return next
@@ -291,7 +317,12 @@ export default function CreateEstimate() {
 
   function openEditItem(idx) {
     const it = items[idx]
-    setItemForm({ ...it })
+    const p = allProducts.find(prod => prod.id === it.product_id)
+    setItemForm({
+      ...it,
+      has_stock: p ? p.has_stock : (it.has_stock || false),
+      stock: p ? p.stock : (it.stock || 0)
+    })
     setProductSearch(it.product_name_snapshot)
     setEditingItemIdx(idx)
     setShowItemModal(true)
@@ -313,9 +344,9 @@ export default function CreateEstimate() {
     if (!productForm.product_name.trim()) return 'Product name is required'
     if (!productForm.unit.trim()) return 'Unit is required'
     if (!productForm.rate || isNaN(productForm.rate) || Number(productForm.rate) < 0) return 'Valid rate is required'
-    if (productForm.calculation_type === 'SQFT') {
-      if (!productForm.length || isNaN(productForm.length)) return 'Length required for Sq.Ft products'
-      if (!productForm.width  || isNaN(productForm.width))  return 'Width required for Sq.Ft products'
+    if (productForm.calculation_type === 'SQFT' || productForm.calculation_type === 'INCH') {
+      if (!productForm.length || isNaN(productForm.length)) return 'Length is required'
+      if (!productForm.width  || isNaN(productForm.width))  return 'Width is required'
     }
     if (productForm.has_stock) {
       if (productForm.stock === '' || isNaN(productForm.stock)) return 'Valid stock amount is required'
@@ -327,14 +358,16 @@ export default function CreateEstimate() {
     const err = validateProduct()
     if (err) { showToast(err, 'error'); return }
     setSavingProduct(true)
+    const isDimensionBased = productForm.calculation_type === 'SQFT' || productForm.calculation_type === 'INCH'
     const payload = {
       product_name: productForm.product_name.trim().toUpperCase(),
       unit: productForm.unit.trim(), rate: Number(productForm.rate),
       calculation_type: productForm.calculation_type,
-      length: productForm.calculation_type === 'SQFT' ? Number(productForm.length) : null,
-      width:  productForm.calculation_type === 'SQFT' ? Number(productForm.width)  : null,
+      length: isDimensionBased && productForm.length ? Number(productForm.length) : null,
+      width:  isDimensionBased && productForm.width  ? Number(productForm.width)  : null,
       has_stock: productForm.has_stock,
       stock: productForm.has_stock ? Number(productForm.stock) : 0,
+      min_stock: productForm.has_stock ? Number(productForm.min_stock || 5) : 5,
       updated_at: new Date().toISOString()
     }
     
@@ -366,7 +399,9 @@ export default function CreateEstimate() {
     const rate = parseFloat(itemForm.rate)
     if (!rate || rate <= 0) { showToast('Enter a valid rate', 'error'); return }
 
-    if (itemForm.calculation_type_snapshot === 'SQFT') {
+    const isPieceBased = itemForm.calculation_type_snapshot === 'SQFT' || itemForm.calculation_type_snapshot === 'INCH'
+
+    if (isPieceBased) {
       if (!itemForm.nos || parseFloat(itemForm.nos) <= 0) {
         showToast('Enter number of pieces (Nos)', 'error'); return
       }
@@ -376,10 +411,35 @@ export default function CreateEstimate() {
       }
     }
 
+    // Stock limit validation check
+    if (itemForm.has_stock) {
+      const availStock = Number(itemForm.stock || 0)
+      const requestedQty = isPieceBased ? (parseFloat(itemForm.nos) || 0) : (parseFloat(itemForm.quantity) || 0)
+      
+      const otherItemsQty = items
+        .filter((_, idx) => idx !== editingItemIdx)
+        .filter(it => it.product_id === itemForm.product_id)
+        .reduce((sum, it) => {
+          const itPieceBased = it.calculation_type_snapshot === 'SQFT' || it.calculation_type_snapshot === 'INCH'
+          return sum + (itPieceBased ? (parseFloat(it.nos) || 0) : (parseFloat(it.quantity) || 0))
+        }, 0)
+      
+      const totalRequested = otherItemsQty + requestedQty
+      if (totalRequested > availStock) {
+        const unit = itemForm.unit_snapshot || 'units'
+        if (otherItemsQty > 0) {
+          showToast(`Cannot add! ${itemForm.product_name_snapshot} has ${availStock} ${unit} stock (${otherItemsQty} already added to this bill).`, 'error')
+        } else {
+          showToast(`Cannot add! ${itemForm.product_name_snapshot} has only ${availStock} ${unit} available in stock.`, 'error')
+        }
+        return
+      }
+    }
+
     const { quantity, amount } = calcItem(itemForm)
     const finalItem = {
       ...itemForm,
-      quantity: itemForm.calculation_type_snapshot === 'SQFT' ? quantity : parseFloat(itemForm.quantity),
+      quantity: isPieceBased ? (itemForm.calculation_type_snapshot === 'SQFT' ? quantity : parseFloat(itemForm.nos)) : parseFloat(itemForm.quantity),
       amount
     }
 
@@ -402,6 +462,7 @@ export default function CreateEstimate() {
   // ── Generate / Save Estimate ──
   async function handleGenerate() {
     if (!siteName.trim()) { showToast('Enter a site name', 'error'); return }
+    if (!preparedBy.trim()) { showToast('Enter Prepared By name (mandatory)', 'error'); return }
     if (items.length === 0) { showToast('Add at least one product', 'error'); return }
     setSaving(true)
     try {
@@ -411,8 +472,12 @@ export default function CreateEstimate() {
         // UPDATE existing estimate
         const { error: estErr } = await supabase.from('estimates').update({
           bill_date: billDate,
-          transport: transport.trim(),
+          transport: clientName.trim().toUpperCase(),
+          client_name: clientName.trim().toUpperCase(),
+          client_mobile: clientMobile.trim(),
+          prepared_by: preparedBy.trim().toUpperCase(),
           site_name: siteName.trim().toUpperCase(),
+          type: docType,
           total_nos: t.total_nos,
           total_quantity: t.total_quantity,
           grand_total: t.grand_total,
@@ -434,40 +499,43 @@ export default function CreateEstimate() {
           unit_snapshot: it.unit_snapshot,
           rate: parseFloat(it.rate),
           calculation_type_snapshot: it.calculation_type_snapshot,
-          amount: it.amount
+          amount: it.amount,
+          remark: it.remark ? it.remark.trim() : null
         }))
         const { error: itemErr } = await supabase.from('estimate_items').insert(newItems)
         if (itemErr) throw itemErr
 
-        // Calculate and apply stock adjustments
-        const netUsage = {}
-        for (const it of items) {
-          const qty = it.calculation_type_snapshot === 'SQFT' ? (parseFloat(it.nos) || 0) : (parseFloat(it.quantity) || 0)
-          netUsage[it.product_id] = (netUsage[it.product_id] || 0) + qty
-        }
-        const origUsage = {}
-        if (isEdit) {
-          for (const oi of originalItems) {
-            const qty = oi.calculation_type_snapshot === 'SQFT' ? (parseFloat(oi.nos) || 0) : (parseFloat(oi.quantity) || 0)
-            origUsage[oi.product_id] = (origUsage[oi.product_id] || 0) + qty
+        // Calculate and apply stock adjustments ONLY if ESTIMATE
+        if (docType === 'ESTIMATE') {
+          const netUsage = {}
+          for (const it of items) {
+            const qty = it.calculation_type_snapshot === 'SQFT' ? (parseFloat(it.nos) || 0) : (parseFloat(it.quantity) || 0)
+            netUsage[it.product_id] = (netUsage[it.product_id] || 0) + qty
           }
-        }
-        for (const p of allProducts) {
-          if (p.has_stock) {
-            const curr = netUsage[p.id] || 0
-            const orig = origUsage[p.id] || 0
-            const diff = curr - orig
-            if (diff !== 0) {
-              const { data: pdata } = await supabase.from('products').select('stock').eq('id', p.id).single()
-              if (pdata) {
-                const newStock = Number(pdata.stock) - diff
-                await supabase.from('products').update({ stock: newStock }).eq('id', p.id)
-                await supabase.from('stock_history').insert({
-                  product_id: p.id,
-                  change_type: isEdit ? 'ESTIMATE_UPDATE' : 'ESTIMATE_DEDUCT',
-                  quantity_changed: -diff,
-                  estimate_id: id
-                })
+          const origUsage = {}
+          if (isEdit) {
+            for (const oi of originalItems) {
+              const qty = oi.calculation_type_snapshot === 'SQFT' ? (parseFloat(oi.nos) || 0) : (parseFloat(oi.quantity) || 0)
+              origUsage[oi.product_id] = (origUsage[oi.product_id] || 0) + qty
+            }
+          }
+          for (const p of allProducts) {
+            if (p.has_stock) {
+              const curr = netUsage[p.id] || 0
+              const orig = origUsage[p.id] || 0
+              const diff = curr - orig
+              if (diff !== 0) {
+                const { data: pdata } = await supabase.from('products').select('stock').eq('id', p.id).single()
+                if (pdata) {
+                  const newStock = Number(pdata.stock) - diff
+                  await supabase.from('products').update({ stock: newStock }).eq('id', p.id)
+                  await supabase.from('stock_history').insert({
+                    product_id: p.id,
+                    change_type: isEdit ? 'ESTIMATE_UPDATE' : 'ESTIMATE_DEDUCT',
+                    quantity_changed: -diff,
+                    estimate_id: id
+                  })
+                }
               }
             }
           }
@@ -476,7 +544,7 @@ export default function CreateEstimate() {
         // save site if new
         await saveSite(siteName.trim().toUpperCase())
         localStorage.removeItem(draftKey) // clear draft on success
-        showToast('Estimate updated ✓')
+        showToast(`${docType === 'QUOTATION' ? 'Quotation' : 'Estimate'} updated ✓`)
         navigate(`/estimate/view/${id}`)
 
       } else {
@@ -489,8 +557,12 @@ export default function CreateEstimate() {
         const { data: est, error: estErr } = await supabase.from('estimates').insert({
           bill_number: billNumber,
           bill_date: billDate,
-          transport: transport.trim(),
+          transport: clientName.trim().toUpperCase(),
+          client_name: clientName.trim().toUpperCase(),
+          client_mobile: clientMobile.trim(),
+          prepared_by: preparedBy.trim().toUpperCase(),
           site_name: siteName.trim().toUpperCase(),
+          type: docType,
           total_nos: t.total_nos,
           total_quantity: t.total_quantity,
           grand_total: t.grand_total
@@ -509,40 +581,34 @@ export default function CreateEstimate() {
           unit_snapshot: it.unit_snapshot,
           rate: parseFloat(it.rate),
           calculation_type_snapshot: it.calculation_type_snapshot,
-          amount: it.amount
+          amount: it.amount,
+          remark: it.remark ? it.remark.trim() : null
         }))
         const { error: itemErr } = await supabase.from('estimate_items').insert(newItems)
         if (itemErr) throw itemErr
 
-        // Calculate and apply stock adjustments
-        const netUsage = {}
-        for (const it of items) {
-          const qty = it.calculation_type_snapshot === 'SQFT' ? (parseFloat(it.nos) || 0) : (parseFloat(it.quantity) || 0)
-          netUsage[it.product_id] = (netUsage[it.product_id] || 0) + qty
-        }
-        const origUsage = {}
-        if (isEdit) {
-          for (const oi of originalItems) {
-            const qty = oi.calculation_type_snapshot === 'SQFT' ? (parseFloat(oi.nos) || 0) : (parseFloat(oi.quantity) || 0)
-            origUsage[oi.product_id] = (origUsage[oi.product_id] || 0) + qty
+        // Calculate and apply stock adjustments ONLY if ESTIMATE
+        if (docType === 'ESTIMATE') {
+          const netUsage = {}
+          for (const it of items) {
+            const qty = it.calculation_type_snapshot === 'SQFT' ? (parseFloat(it.nos) || 0) : (parseFloat(it.quantity) || 0)
+            netUsage[it.product_id] = (netUsage[it.product_id] || 0) + qty
           }
-        }
-        for (const p of allProducts) {
-          if (p.has_stock) {
-            const curr = netUsage[p.id] || 0
-            const orig = origUsage[p.id] || 0
-            const diff = curr - orig
-            if (diff !== 0) {
-              const { data: pdata } = await supabase.from('products').select('stock').eq('id', p.id).single()
-              if (pdata) {
-                const newStock = Number(pdata.stock) - diff
-                await supabase.from('products').update({ stock: newStock }).eq('id', p.id)
-                await supabase.from('stock_history').insert({
-                  product_id: p.id,
-                  change_type: isEdit ? 'ESTIMATE_UPDATE' : 'ESTIMATE_DEDUCT',
-                  quantity_changed: -diff,
-                  estimate_id: isEdit ? id : est.id
-                })
+          for (const p of allProducts) {
+            if (p.has_stock) {
+              const curr = netUsage[p.id] || 0
+              if (curr !== 0) {
+                const { data: pdata } = await supabase.from('products').select('stock').eq('id', p.id).single()
+                if (pdata) {
+                  const newStock = Number(pdata.stock) - curr
+                  await supabase.from('products').update({ stock: newStock }).eq('id', p.id)
+                  await supabase.from('stock_history').insert({
+                    product_id: p.id,
+                    change_type: 'ESTIMATE_DEDUCT',
+                    quantity_changed: -curr,
+                    estimate_id: est.id
+                  })
+                }
               }
             }
           }
@@ -550,7 +616,7 @@ export default function CreateEstimate() {
 
         await saveSite(siteName.trim().toUpperCase())
         localStorage.removeItem(draftKey) // clear draft on success
-        showToast('Estimate saved ✓')
+        showToast(`${docType === 'QUOTATION' ? 'Quotation' : 'Estimate'} saved ✓`)
         navigate(`/estimate/view/${est.id}`)
       }
     } catch (err) {
@@ -582,13 +648,41 @@ export default function CreateEstimate() {
     <div className="app-container">
       <div className="top-nav">
         <button className="nav-back" onClick={() => navigate(-1)}>←</button>
-        <span className="nav-title">{isEdit ? `Edit Bill #${existingBillNumber}` : 'New Estimate'}</span>
+        <span className="nav-title">
+          {isEdit 
+            ? `Edit ${docType === 'QUOTATION' ? 'Quotation' : 'Estimate'} #${existingBillNumber}` 
+            : `New ${docType === 'QUOTATION' ? 'Quotation' : 'Estimate'}`}
+        </span>
       </div>
 
       <div className="page">
 
         {/* Bill info */}
         <div className="card">
+          {!isEdit && (
+            <div className="field" style={{ marginBottom: 16 }}>
+              <label>Document Type</label>
+              <div style={{ display: 'flex', gap: 10 }}>
+                <button
+                  type="button"
+                  className={`btn btn-sm ${docType === 'QUOTATION' ? 'btn-primary' : 'btn-secondary'}`}
+                  onClick={() => setDocType('QUOTATION')}
+                  style={{ flex: 1 }}
+                >
+                  📜 Quotation
+                </button>
+                <button
+                  type="button"
+                  className={`btn btn-sm ${docType === 'ESTIMATE' ? 'btn-primary' : 'btn-secondary'}`}
+                  onClick={() => setDocType('ESTIMATE')}
+                  style={{ flex: 1 }}
+                >
+                  📄 Estimate
+                </button>
+              </div>
+            </div>
+          )}
+
           <div className="field-row">
             <div className="field">
               <label>Bill No.</label>
@@ -601,10 +695,23 @@ export default function CreateEstimate() {
             </div>
           </div>
 
+          <div className="field-row">
+            <div className="field">
+              <label>Client Name</label>
+              <input value={clientName} onChange={e => setClientName(e.target.value)}
+                placeholder="Client name (optional)" />
+            </div>
+            <div className="field">
+              <label>Mobile (M.)</label>
+              <input type="tel" value={clientMobile} onChange={e => setClientMobile(e.target.value)}
+                placeholder="Mobile number (optional)" />
+            </div>
+          </div>
+
           <div className="field">
-            <label>Transport</label>
-            <input value={transport} onChange={e => setTransport(e.target.value)}
-              placeholder="Transporter name (optional)" />
+            <label>Prepared By *</label>
+            <input value={preparedBy} onChange={e => setPreparedBy(e.target.value)}
+              placeholder="Enter name (mandatory)" style={{ textTransform: 'uppercase' }} />
           </div>
 
           {/* Site name with autocomplete */}
@@ -648,10 +755,10 @@ export default function CreateEstimate() {
         ) : items.map((it, idx) => (
           <div key={idx} className="item-card">
             <div className="item-name">
-              {idx + 1}. {it.product_name_snapshot}
+              {idx + 1}. {it.product_name_snapshot}{it.remark ? ` - ${it.remark}` : ''}
             </div>
             <div className="item-grid">
-              {it.calculation_type_snapshot === 'SQFT' ? (
+              {it.calculation_type_snapshot === 'SQFT' || it.calculation_type_snapshot === 'INCH' ? (
                 <>
                   <div><span style={{ color: 'var(--text-muted)', fontSize: 12 }}>NOS</span><br />{it.nos}</div>
                   <div><span style={{ color: 'var(--text-muted)', fontSize: 12 }}>QTY</span><br />{it.quantity} {it.unit_snapshot}</div>
@@ -661,7 +768,7 @@ export default function CreateEstimate() {
               )}
               <div><span style={{ color: 'var(--text-muted)', fontSize: 12 }}>RATE</span><br />₹{Number(it.rate).toFixed(2)}</div>
             </div>
-            <div className="item-amount">₹{Number(it.amount).toLocaleString('en-IN', { minimumFractionDigits: 2 })}</div>
+            <div className="item-amount">₹{Number(calcItem(it).amount || it.amount || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}</div>
             <div className="item-actions">
               <button className="btn btn-secondary btn-sm" onClick={() => openEditItem(idx)}>✏️ Edit</button>
               <button className="btn btn-danger btn-sm" onClick={() => removeItem(idx)}>🗑 Remove</button>
@@ -695,7 +802,11 @@ export default function CreateEstimate() {
             style={{ flexShrink: 0 }}>Cancel</button>
           <button className="btn btn-primary btn-full btn-lg"
             onClick={handleGenerate} disabled={saving}>
-            {saving ? 'Saving...' : isEdit ? '💾 SAVE CHANGES' : '📄 GENERATE ESTIMATE'}
+            {saving 
+              ? 'Saving...' 
+              : isEdit 
+                ? '💾 SAVE CHANGES' 
+                : (docType === 'QUOTATION' ? '📜 GENERATE QUOTATION' : '📄 GENERATE ESTIMATE')}
           </button>
         </div>
       </div>
@@ -752,20 +863,20 @@ export default function CreateEstimate() {
               <div style={{ background: 'var(--accent-light)', border: '1px solid var(--accent)', borderRadius: 8, padding: '10px 12px', marginBottom: 16, fontSize: 13 }}>
                 <strong>{itemForm.product_name_snapshot}</strong><br />
                 {itemForm.unit_snapshot} · {itemForm.calculation_type_snapshot}
-                {itemForm.calculation_type_snapshot === 'SQFT' &&
-                  ` · ${itemForm.length_snapshot} × ${itemForm.width_snapshot} ft`}
+                {Boolean(itemForm.length_snapshot && itemForm.width_snapshot) &&
+                  ` · ${itemForm.length_snapshot} × ${itemForm.width_snapshot}`}
                 {itemForm.has_stock && (
                   <div style={{ marginTop: 4, color: itemForm.stock > 0 ? 'var(--primary-color)' : 'var(--danger-color)', fontWeight: 600 }}>
-                    Available Stock: {itemForm.stock}
+                    Available Stock: {itemForm.stock} {itemForm.unit_snapshot}
                   </div>
                 )}
               </div>
             )}
 
-            {/* Nos (SQFT only) */}
-            {itemForm.calculation_type_snapshot === 'SQFT' && (
+            {/* Nos (SQFT and INCH) */}
+            {(itemForm.calculation_type_snapshot === 'SQFT' || itemForm.calculation_type_snapshot === 'INCH') && (
               <div className="field">
-                <label>Nos. (Number of Pieces) *</label>
+                <label>Nos. (Number of Pieces / Units) *</label>
                 <input name="nos" type="number" inputMode="decimal"
                   ref={nosInputRef}
                   value={itemForm.nos} onChange={handleItemChange}
@@ -773,8 +884,11 @@ export default function CreateEstimate() {
                   placeholder="e.g. 10" autoFocus={false} />
                 {itemForm.nos && itemForm.length_snapshot && itemForm.width_snapshot && (
                   <div style={{ fontSize: 13, color: 'var(--accent)', marginTop: 4, fontWeight: 600 }}>
-                    {itemForm.length_snapshot} × {itemForm.width_snapshot} × {itemForm.nos}
-                    = {(itemForm.length_snapshot * itemForm.width_snapshot * (parseFloat(itemForm.nos)||0)).toFixed(2)} {itemForm.unit_snapshot}
+                    {itemForm.calculation_type_snapshot === 'SQFT' ? (
+                      `${itemForm.length_snapshot} × ${itemForm.width_snapshot} × ${itemForm.nos} = ${(itemForm.length_snapshot * itemForm.width_snapshot * (parseFloat(itemForm.nos)||0)).toFixed(2)} Sq.Ft`
+                    ) : (
+                      `${itemForm.length_snapshot} × ${itemForm.width_snapshot} × ${itemForm.nos} × ₹${itemForm.rate} = ₹${(itemForm.length_snapshot * itemForm.width_snapshot * (parseFloat(itemForm.nos)||0) * (parseFloat(itemForm.rate)||0)).toFixed(2)} (Qty: ${itemForm.nos} ${itemForm.unit_snapshot})`
+                    )}
                   </div>
                 )}
               </div>
@@ -799,6 +913,14 @@ export default function CreateEstimate() {
                 value={itemForm.rate} onChange={handleItemChange}
                 onKeyDown={handleInputKeyDown}
                 placeholder="0.00" />
+            </div>
+
+            {/* Remark */}
+            <div className="field">
+              <label>Remark / Extra Note (Optional)</label>
+              <input name="remark" value={itemForm.remark || ''} onChange={handleItemChange}
+                onKeyDown={handleInputKeyDown}
+                placeholder="e.g. Soft Close, Gloss Finish (optional)" />
             </div>
 
             {/* Calculated amount preview */}
