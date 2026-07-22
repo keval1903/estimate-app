@@ -5,7 +5,8 @@ import { useToast } from '../hooks/useToast.jsx'
 
 const EMPTY_FORM = {
   product_name: '', length: '', width: '',
-  unit: '', rate: '', calculation_type: 'QUANTITY'
+  unit: '', rate: '', calculation_type: 'QUANTITY',
+  has_stock: false, stock: ''
 }
 const UNITS = ['Sq.Ft', 'Nos.', 'Kg.', 'Bundle', 'Rmt', 'Ltr', 'Pkt', 'Box', 'Set', 'Pair']
 
@@ -23,6 +24,7 @@ export default function Products() {
   const [deleteConfirm, setDeleteConfirm] = useState(null)
   const [importText, setImportText] = useState('')
   const [importPreview, setImportPreview] = useState([])
+  const [selectedIds, setSelectedIds] = useState(new Set())
   const fileRef = useRef()
 
   useEffect(() => { fetchProducts() }, [])
@@ -46,15 +48,17 @@ export default function Products() {
     setForm({
       product_name: p.product_name, length: p.length ?? '',
       width: p.width ?? '', unit: p.unit, rate: p.rate,
-      calculation_type: p.calculation_type
+      calculation_type: p.calculation_type,
+      has_stock: p.has_stock || false, stock: p.stock ?? ''
     })
     setEditingId(p.id); setShowModal(true)
   }
 
   function handleFormChange(e) {
-    const { name, value } = e.target
+    const { name, value, type, checked } = e.target
+    const val = type === 'checkbox' ? checked : value
     setForm(f => {
-      const next = { ...f, [name]: value }
+      const next = { ...f, [name]: val }
       if (name === 'unit') next.calculation_type = value === 'Sq.Ft' ? 'SQFT' : 'QUANTITY'
       if (name === 'calculation_type' && value === 'QUANTITY') { next.length = ''; next.width = '' }
       return next
@@ -69,6 +73,9 @@ export default function Products() {
       if (!form.length || isNaN(form.length)) return 'Length required for Sq.Ft products'
       if (!form.width  || isNaN(form.width))  return 'Width required for Sq.Ft products'
     }
+    if (form.has_stock) {
+      if (form.stock === '' || isNaN(form.stock)) return 'Valid stock amount is required'
+    }
     return null
   }
 
@@ -82,17 +89,43 @@ export default function Products() {
       calculation_type: form.calculation_type,
       length: form.calculation_type === 'SQFT' ? Number(form.length) : null,
       width:  form.calculation_type === 'SQFT' ? Number(form.width)  : null,
+      has_stock: form.has_stock,
+      stock: form.has_stock ? Number(form.stock) : 0,
       updated_at: new Date().toISOString()
     }
-    let error
-    if (editingId) {
-      ;({ error } = await supabase.from('products').update(payload).eq('id', editingId))
+    let error, data
+    let targetId = editingId
+    let oldStock = 0
+
+    // If not editing, check for existing product by name to update instead of insert
+    if (!targetId) {
+      const existing = products.find(p => p.product_name.toLowerCase() === payload.product_name.toLowerCase())
+      if (existing) { targetId = existing.id; oldStock = existing.stock || 0 }
     } else {
-      ;({ error } = await supabase.from('products').insert(payload))
+      const existing = products.find(p => p.id === targetId)
+      if (existing) oldStock = existing.stock || 0
+    }
+
+    if (targetId) {
+      ;({ data, error } = await supabase.from('products').update(payload).eq('id', targetId).select().single())
+    } else {
+      ;({ data, error } = await supabase.from('products').insert(payload).select().single())
     }
     setSaving(false)
     if (error) { showToast('Save failed: ' + error.message, 'error'); return }
-    showToast(editingId ? 'Product updated ✓' : 'Product added ✓')
+
+    if (payload.has_stock) {
+      const diff = payload.stock - oldStock
+      if (diff !== 0 || !targetId) {
+        await supabase.from('stock_history').insert({
+          product_id: data.id,
+          change_type: 'MANUAL_ADJUST',
+          quantity_changed: diff !== 0 ? diff : payload.stock
+        })
+      }
+    }
+    
+    showToast(targetId ? 'Product updated ✓' : 'Product added ✓')
     setShowModal(false); fetchProducts()
   }
 
@@ -101,6 +134,20 @@ export default function Products() {
     if (error) showToast('Delete failed', 'error')
     else { showToast('Product deleted'); fetchProducts() }
     setDeleteConfirm(null)
+  }
+
+  async function handleDeleteSelected() {
+    if (selectedIds.size === 0) return
+    if (!window.confirm(`Delete ${selectedIds.size} selected products?`)) return
+    setSaving(true)
+    const { error } = await supabase.from('products').delete().in('id', Array.from(selectedIds))
+    setSaving(false)
+    if (error) showToast('Delete failed', 'error')
+    else {
+      showToast(`Deleted ${selectedIds.size} products`)
+      setSelectedIds(new Set())
+      fetchProducts()
+    }
   }
 
   function handleFileChange(e) {
@@ -115,15 +162,18 @@ export default function Products() {
     for (const line of lines) {
       const cols = line.split(/,|\t/).map(c => c.trim().replace(/^"|"$/g, ''))
       if (cols.length < 3) continue
-      const [product_name, length, width, unit, rate, calculation_type] = cols
+      const [product_name, length, width, unit, rate, calculation_type, has_stock, stock] = cols
       if (product_name.toLowerCase().includes('product') && rate?.toLowerCase().includes('rate')) continue
       if (isNaN(Number(rate)) || !product_name || !unit) continue
       const calcType = calculation_type?.toUpperCase().trim() === 'SQFT' ? 'SQFT' : 'QUANTITY'
+      const parsedHasStock = has_stock?.toLowerCase() === 'yes' || has_stock?.toLowerCase() === 'true'
+      const parsedStock = parsedHasStock && !isNaN(Number(stock)) ? Number(stock) : 0
       rows.push({
         product_name: product_name.toUpperCase(),
         length: length ? Number(length) : null,
         width:  width  ? Number(width)  : null,
-        unit: unit.trim(), rate: Number(rate), calculation_type: calcType
+        unit: unit.trim(), rate: Number(rate), calculation_type: calcType,
+        has_stock: parsedHasStock, stock: parsedStock
       })
     }
     setImportPreview(rows)
@@ -131,17 +181,75 @@ export default function Products() {
 
   async function handleImport() {
     if (!importPreview.length) { showToast('No valid rows to import', 'error'); return }
-    setSaving(true); let added = 0, skipped = 0
+    setSaving(true); let added = 0, updated = 0
     for (const row of importPreview) {
       const existing = products.find(p => p.product_name.toLowerCase() === row.product_name.toLowerCase())
-      if (existing) { skipped++; continue }
-      const { error } = await supabase.from('products').insert(row)
-      if (!error) added++
+      let targetId = null
+      let oldStock = 0
+      let data, error
+
+      if (existing) {
+        targetId = existing.id
+        oldStock = existing.stock || 0
+        ;({ data, error } = await supabase.from('products').update(row).eq('id', targetId).select().single())
+        if (!error) updated++
+      } else {
+        ;({ data, error } = await supabase.from('products').insert(row).select().single())
+        if (!error) { added++; targetId = data.id }
+      }
+
+      if (!error && row.has_stock && data) {
+        const diff = row.stock - oldStock
+        if (diff !== 0 || !existing) {
+          await supabase.from('stock_history').insert({
+            product_id: targetId,
+            change_type: 'CSV_IMPORT',
+            quantity_changed: diff !== 0 ? diff : row.stock
+          })
+        }
+      }
     }
     setSaving(false)
-    showToast(`Imported ${added} products, skipped ${skipped} duplicates`)
+    showToast(`Imported: ${added} added, ${updated} updated`)
     setShowImport(false); setImportPreview([]); setImportText('')
     fetchProducts()
+  }
+
+  function handleExport() {
+    if (!filtered.length) { showToast('No products to export', 'error'); return }
+    const headers = ['Product Name', 'Length', 'Width', 'Unit', 'Rate', 'Calculation Type', 'Has Stock', 'Stock']
+    const csvRows = [headers.join(',')]
+    for (const p of filtered) {
+      csvRows.push([
+        `"${p.product_name}"`,
+        p.length || '',
+        p.width || '',
+        p.unit,
+        p.rate,
+        p.calculation_type,
+        p.has_stock ? 'Yes' : 'No',
+        p.has_stock ? p.stock : ''
+      ].join(','))
+    }
+    const blob = new Blob([csvRows.join('\n')], { type: 'text/csv' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = 'products_export.csv'
+    a.click()
+    URL.revokeObjectURL(url)
+  }
+
+  const allSelected = filtered.length > 0 && selectedIds.size === filtered.length
+  function toggleSelectAll() {
+    if (allSelected) setSelectedIds(new Set())
+    else setSelectedIds(new Set(filtered.map(p => p.id)))
+  }
+  function toggleSelect(id) {
+    const next = new Set(selectedIds)
+    if (next.has(id)) next.delete(id)
+    else next.add(id)
+    setSelectedIds(next)
   }
 
   return (
@@ -149,9 +257,14 @@ export default function Products() {
       <div className="top-nav">
         <button className="nav-back" onClick={() => navigate('/')}>←</button>
         <span className="nav-title">Product Master</span>
-        <button className="btn btn-sm"
-          style={{ background: 'rgba(255,255,255,0.2)', color: '#fff', border: '1px solid rgba(255,255,255,0.4)' }}
-          onClick={() => setShowImport(true)}>⬆ Import</button>
+        <div style={{ display: 'flex', gap: '8px' }}>
+          <button className="btn btn-sm"
+            style={{ background: 'rgba(255,255,255,0.2)', color: '#fff', border: '1px solid rgba(255,255,255,0.4)' }}
+            onClick={handleExport}>⬇ Export</button>
+          <button className="btn btn-sm"
+            style={{ background: 'rgba(255,255,255,0.2)', color: '#fff', border: '1px solid rgba(255,255,255,0.4)' }}
+            onClick={() => setShowImport(true)}>⬆ Import</button>
+        </div>
       </div>
 
       <div className="page">
@@ -164,6 +277,19 @@ export default function Products() {
 
         <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:12 }}>
           <span className="section-label">{filtered.length} Products</span>
+          {filtered.length > 0 && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, cursor: 'pointer' }}>
+                <input type="checkbox" checked={allSelected} onChange={toggleSelectAll} style={{ width: 16, height: 16 }} />
+                Select All
+              </label>
+              {selectedIds.size > 0 && (
+                <button className="btn btn-danger btn-sm" onClick={handleDeleteSelected}>
+                  🗑 Delete ({selectedIds.size})
+                </button>
+              )}
+            </div>
+          )}
         </div>
 
         {loading ? <div className="spinner" /> : filtered.length === 0 ? (
@@ -172,14 +298,17 @@ export default function Products() {
             <p>{search ? 'No products match your search' : 'No products yet. Tap + ADD PRODUCT below!'}</p>
           </div>
         ) : filtered.map(p => (
-          <div key={p.id} className="item-card">
+          <div key={p.id} className="item-card" style={{ border: selectedIds.has(p.id) ? '2px solid var(--primary-color)' : '1px solid var(--border-light)' }}>
             <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start' }}>
-              <div className="item-name" style={{ flex:1, marginRight:8 }}>{p.product_name}</div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, flex: 1, marginRight: 8 }}>
+                <input type="checkbox" checked={selectedIds.has(p.id)} onChange={() => toggleSelect(p.id)} style={{ width: 18, height: 18, cursor: 'pointer' }} />
+                <div className="item-name">{p.product_name}</div>
+              </div>
               <span className={`badge ${p.calculation_type === 'SQFT' ? 'badge-sqft' : 'badge-qty'}`}>
                 {p.calculation_type}
               </span>
             </div>
-            <div className="item-grid" style={{ marginTop:8 }}>
+            <div className="item-grid" style={{ marginTop:8, marginLeft: 26 }}>
               <div><span style={{ color:'var(--text-muted)', fontSize:12 }}>UNIT</span><br />{p.unit}</div>
               <div><span style={{ color:'var(--text-muted)', fontSize:12 }}>RATE</span><br />₹{Number(p.rate).toFixed(2)}</div>
               {p.calculation_type === 'SQFT' && (
@@ -188,8 +317,16 @@ export default function Products() {
                   <div><span style={{ color:'var(--text-muted)', fontSize:12 }}>WIDTH</span><br />{p.width} ft</div>
                 </>
               )}
+              {p.has_stock && (
+                <div>
+                  <span style={{ color:'var(--text-muted)', fontSize:12 }}>STOCK</span><br />
+                  <span style={{ fontWeight: 600, color: p.stock > 0 ? 'var(--primary-color)' : 'var(--danger-color)' }}>
+                    {p.stock}
+                  </span>
+                </div>
+              )}
             </div>
-            <div className="item-actions">
+            <div className="item-actions" style={{ marginLeft: 26 }}>
               <button className="btn btn-secondary btn-sm" onClick={() => openEdit(p)}>✏️ Edit</button>
               <button className="btn btn-danger btn-sm" onClick={() => setDeleteConfirm(p)}>🗑 Delete</button>
             </div>
@@ -250,6 +387,19 @@ export default function Products() {
                 </div>
               </div>
             )}
+            <div className="field">
+              <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', fontWeight: 'bold' }}>
+                <input type="checkbox" name="has_stock" checked={!!form.has_stock} onChange={handleFormChange} style={{ width: 16, height: 16 }} />
+                Manage Stock for this product
+              </label>
+            </div>
+            {form.has_stock && (
+              <div className="field">
+                <label>Current Stock *</label>
+                <input name="stock" type="number" inputMode="decimal"
+                  value={form.stock} onChange={handleFormChange} placeholder="e.g. 100" />
+              </div>
+            )}
             <div style={{ display:'flex', gap:10, marginTop:8 }}>
               <button className="btn btn-secondary btn-full" onClick={() => setShowModal(false)}>Cancel</button>
               <button className="btn btn-primary btn-full" onClick={handleSave} disabled={saving}>
@@ -283,8 +433,8 @@ export default function Products() {
               <button className="btn btn-ghost" onClick={() => setShowImport(false)}>✕</button>
             </div>
             <p style={{ fontSize:13, color:'var(--text-muted)', marginBottom:12 }}>
-              Columns: <strong>Product Name, Length, Width, Unit, Rate, Calculation Type</strong><br />
-              Leave Length/Width blank for QUANTITY products.
+              Columns: <strong>Product Name, Length, Width, Unit, Rate, Calculation Type, Has Stock, Stock</strong><br />
+              Leave Length/Width blank for QUANTITY products. "Has Stock" should be Yes/No.
             </p>
             <div className="field">
               <label>Upload CSV File</label>

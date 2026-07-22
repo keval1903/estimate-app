@@ -11,6 +11,8 @@ export default function EstimateList() {
   const [search, setSearch] = useState('')
   const [deleteConfirm, setDeleteConfirm] = useState(null)
   const [deleting, setDeleting] = useState(false)
+  const [selectedIds, setSelectedIds] = useState(new Set())
+  const [collapsedDates, setCollapsedDates] = useState(new Set())
 
   const fetchEstimates = useCallback(async () => {
     setLoading(true)
@@ -53,8 +55,72 @@ export default function EstimateList() {
     setDeleting(false)
   }
 
+  async function handleDeleteSelected() {
+    if (selectedIds.size === 0) return
+    if (!window.confirm(`Delete ${selectedIds.size} selected estimates?`)) return
+    setDeleting(true)
+    const { error } = await supabase.from('estimates').delete().in('id', Array.from(selectedIds))
+    if (error) showToast('Delete failed: ' + error.message, 'error')
+    else {
+      showToast(`Deleted ${selectedIds.size} estimates`)
+      setSelectedIds(new Set())
+      fetchEstimates()
+    }
+    setDeleting(false)
+  }
+
   function formatTotal(val) {
     return Number(val).toLocaleString('en-IN', { minimumFractionDigits: 2 })
+  }
+
+  const groupedEstimates = {}
+  for (const est of estimates) {
+    if (!groupedEstimates[est.bill_date]) groupedEstimates[est.bill_date] = []
+    groupedEstimates[est.bill_date].push(est)
+  }
+
+  function parseDate(dateStr) {
+    if (!dateStr) return new Date(0)
+    const parts = dateStr.split('-')
+    if (parts.length === 3) {
+      return new Date(`${parts[2]}-${parts[1]}-${parts[0]}T00:00:00`)
+    }
+    return new Date(dateStr)
+  }
+
+  // Sort dates descending
+  const dates = Object.keys(groupedEstimates).sort((a, b) => parseDate(b) - parseDate(a))
+
+  const allSelected = estimates.length > 0 && selectedIds.size === estimates.length
+  function toggleSelectAll() {
+    if (allSelected) setSelectedIds(new Set())
+    else setSelectedIds(new Set(estimates.map(e => e.id)))
+  }
+
+  function toggleSelectDate(date) {
+    const dateEsts = groupedEstimates[date]
+    const allInDateSelected = dateEsts.every(e => selectedIds.has(e.id))
+    const next = new Set(selectedIds)
+    if (allInDateSelected) {
+      dateEsts.forEach(e => next.delete(e.id))
+    } else {
+      dateEsts.forEach(e => next.add(e.id))
+    }
+    setSelectedIds(next)
+  }
+
+  function toggleSelect(id) {
+    const next = new Set(selectedIds)
+    if (next.has(id)) next.delete(id)
+    else next.add(id)
+    setSelectedIds(next)
+  }
+
+  function toggleCollapse(date) {
+    const next = new Set(collapsedDates)
+    if (next.has(date)) next.delete(date)
+    else next.add(date)
+    setCollapsedDates(next)
   }
 
   return (
@@ -80,6 +146,19 @@ export default function EstimateList() {
 
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
           <span className="section-label">{estimates.length} Estimate{estimates.length !== 1 ? 's' : ''}</span>
+          {estimates.length > 0 && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, cursor: 'pointer' }}>
+                <input type="checkbox" checked={allSelected} onChange={toggleSelectAll} style={{ width: 16, height: 16 }} />
+                Select All
+              </label>
+              {selectedIds.size > 0 && (
+                <button className="btn btn-danger btn-sm" onClick={handleDeleteSelected}>
+                  🗑 Delete ({selectedIds.size})
+                </button>
+              )}
+            </div>
+          )}
         </div>
 
         {loading ? (
@@ -90,46 +169,71 @@ export default function EstimateList() {
             <p>{search ? 'No estimates match your search' : 'No estimates yet. Create your first one!'}</p>
           </div>
         ) : (
-          estimates.map(est => (
-            <div key={est.id} className="estimate-row">
-              <div className="est-header">
-                <div>
-                  <div className="est-bill">Bill #{est.bill_number}</div>
-                  <div className="est-meta">
-                    📅 {est.bill_date}
-                    {est.transport ? ` · 🚛 ${est.transport}` : ''}
+          dates.map(date => {
+            const dateEsts = groupedEstimates[date]
+            const isCollapsed = collapsedDates.has(date)
+            const allInDateSelected = dateEsts.every(e => selectedIds.has(e.id))
+            return (
+              <div key={date} style={{ marginBottom: 24 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8, padding: '4px 8px', background: 'var(--surface-color)', borderRadius: 8 }}>
+                  <button className="btn btn-ghost btn-sm" style={{ padding: '4px 8px', minWidth: 'auto' }} onClick={() => toggleCollapse(date)}>
+                    {isCollapsed ? '▶' : '▼'}
+                  </button>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: 8, flex: 1, cursor: 'pointer', margin: 0, fontWeight: 600 }}>
+                    <input type="checkbox" checked={allInDateSelected} onChange={() => toggleSelectDate(date)} style={{ width: 16, height: 16 }} />
+                    {parseDate(date).toLocaleDateString('en-IN', { weekday: 'short', year: 'numeric', month: 'short', day: 'numeric' })}
+                    <span style={{ fontSize: 12, color: 'var(--text-muted)', fontWeight: 400 }}>({dateEsts.length})</span>
+                  </label>
+                </div>
+                {!isCollapsed && dateEsts.map(est => (
+                  <div key={est.id} className="estimate-row" style={{ border: selectedIds.has(est.id) ? '2px solid var(--primary-color)' : '1px solid var(--border-light)' }}>
+                    <div className="est-header">
+                      <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12 }}>
+                        <input type="checkbox" checked={selectedIds.has(est.id)} onChange={() => toggleSelect(est.id)} style={{ width: 18, height: 18, marginTop: 4, cursor: 'pointer' }} />
+                        <div>
+                          <div className="est-bill" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                            Bill #{est.bill_number}
+                            <span style={{ fontSize: 13, color: 'var(--text-muted)', fontWeight: 400 }}>
+                              {est.bill_date.replace(/-/g, '/')}
+                            </span>
+                          </div>
+                          <div className="est-meta">
+                            {est.transport ? `🚛 ${est.transport}` : ''}
+                          </div>
+                          <div style={{ fontWeight: 600, fontSize: 15 }}>📍 {est.site_name}</div>
+                        </div>
+                      </div>
+                      <div style={{ textAlign: 'right' }}>
+                        <div className="est-total">₹{formatTotal(est.grand_total)}</div>
+                      </div>
+                    </div>
+
+                    <div className="est-actions" style={{ marginLeft: 30 }}>
+                      <button className="btn btn-secondary btn-sm"
+                        onClick={() => navigate(`/estimate/view/${est.id}`)}>
+                        👁 View
+                      </button>
+                      <button className="btn btn-primary btn-sm"
+                        onClick={() => navigate(`/estimate/edit/${est.id}`)}>
+                        ✏️ Edit
+                      </button>
+                      <button className="btn btn-secondary btn-sm"
+                        onClick={() => {
+                          navigate(`/estimate/view/${est.id}`)
+                          setTimeout(() => window.print(), 800)
+                        }}>
+                        🖨 Print
+                      </button>
+                      <button className="btn btn-danger btn-sm"
+                        onClick={() => setDeleteConfirm(est)}>
+                        🗑
+                      </button>
+                    </div>
                   </div>
-                  <div style={{ fontWeight: 600, fontSize: 15 }}>📍 {est.site_name}</div>
-                </div>
-                <div style={{ textAlign: 'right' }}>
-                  <div className="est-total">₹{formatTotal(est.grand_total)}</div>
-
-                </div>
+                ))}
               </div>
-
-              <div className="est-actions">
-                <button className="btn btn-secondary btn-sm"
-                  onClick={() => navigate(`/estimate/view/${est.id}`)}>
-                  👁 View
-                </button>
-                <button className="btn btn-primary btn-sm"
-                  onClick={() => navigate(`/estimate/edit/${est.id}`)}>
-                  ✏️ Edit
-                </button>
-                <button className="btn btn-secondary btn-sm"
-                  onClick={() => {
-                    navigate(`/estimate/view/${est.id}`)
-                    setTimeout(() => window.print(), 800)
-                  }}>
-                  🖨 Print
-                </button>
-                <button className="btn btn-danger btn-sm"
-                  onClick={() => setDeleteConfirm(est)}>
-                  🗑
-                </button>
-              </div>
-            </div>
-          ))
+            )
+          })
         )}
       </div>
 

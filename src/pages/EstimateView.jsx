@@ -11,7 +11,7 @@ export default function EstimateView() {
   const [items, setItems] = useState([])
   const [loading, setLoading] = useState(true)
   const [exporting, setExporting] = useState('')
-  const [paperSize, setPaperSize] = useState('a4')
+  const [paperSize, setPaperSize] = useState('a5')
   const [layoutMode, setLayoutMode] = useState('full')
   const previewRef = useRef()
 
@@ -48,7 +48,7 @@ export default function EstimateView() {
       const { default: jsPDF } = await import('jspdf')
       const { default: html2canvas } = await import('html2canvas')
       const el = previewRef.current
-      const canvas = await html2canvas(el, { scale: 2, useCORS: true, backgroundColor: '#fff' })
+      const canvas = await html2canvas(el, { scale: 2, useCORS: true, backgroundColor: '#fff', scrollY: -window.scrollY })
       const imgData = canvas.toDataURL('image/png')
       const pdf = new jsPDF({ orientation: 'portrait', unit: 'mm', format: paperSize })
       const pdfW = pdf.internal.pageSize.getWidth()
@@ -67,7 +67,7 @@ export default function EstimateView() {
     try {
       const { default: html2canvas } = await import('html2canvas')
       const el = previewRef.current
-      const canvas = await html2canvas(el, { scale: 3, useCORS: true, backgroundColor: '#fff' })
+      const canvas = await html2canvas(el, { scale: 3, useCORS: true, backgroundColor: '#fff', scrollY: -window.scrollY })
       const link = document.createElement('a')
       link.download = getFilename('png')
       link.href = canvas.toDataURL('image/png')
@@ -96,26 +96,34 @@ export default function EstimateView() {
   }
 
   async function handleWhatsApp() {
+    const text = getSummaryText()
     // Try native share with image first (mobile)
     if (navigator.share && navigator.canShare) {
       try {
         const { default: html2canvas } = await import('html2canvas')
         const el = previewRef.current
-        const canvas = await html2canvas(el, { scale: 3, backgroundColor: '#fff' })
+        const canvas = await html2canvas(el, { scale: 3, useCORS: true, backgroundColor: '#fff', scrollY: -window.scrollY })
         canvas.toBlob(async (blob) => {
           const file = new File([blob], getFilename('png'), { type: 'image/png' })
           if (navigator.canShare({ files: [file] })) {
-            await navigator.share({ files: [file], title: `Estimate #${estimate.bill_number}`, text: getSummaryText() })
+            // Windows native share often drops the 'text' field when passing to WhatsApp Desktop. 
+            // We copy it to clipboard so the user can easily paste it as a caption.
+            try { 
+              await navigator.clipboard.writeText(text)
+              showToast('Caption copied! Paste it in WhatsApp') 
+            } catch(e) {}
+            
+            await navigator.share({ files: [file], title: `Estimate #${estimate.bill_number}`, text })
             return
           }
           // fallback to wa.me
-          window.open(`https://wa.me/?text=${encodeURIComponent(getSummaryText())}`, '_blank')
+          window.open(`https://wa.me/?text=${encodeURIComponent(text)}`, '_blank')
         }, 'image/png')
         return
       } catch { }
     }
     // Desktop: open WhatsApp Web with text
-    window.open(`https://wa.me/?text=${encodeURIComponent(getSummaryText())}`, '_blank')
+    window.open(`https://wa.me/?text=${encodeURIComponent(text)}`, '_blank')
   }
 
   if (loading) return <div className="app-container"><div className="spinner" /></div>
@@ -173,39 +181,52 @@ export default function EstimateView() {
         <div id="estimate-preview" ref={previewRef}>
           <table style={{ width: '100%', borderCollapse: 'collapse', border: '1.5px solid #000', fontFamily: 'Arial, sans-serif', fontSize: 13, color: '#000', background: '#fff' }}>
             <colgroup>
-              <col style={{ width: 30 }} />
-              <col style={{ width: 'auto' }} />
-              <col style={{ width: 38 }} />
-              <col style={{ width: 88 }} />
-              <col style={{ width: 52 }} />
-              <col style={{ width: 80 }} />
+              <col style={{ width: 42 }} />     {/* Sr No */}
+              <col style={{ width: 'auto' }} /> {/* Description */}
+              <col style={{ width: 42 }} />     {/* Nos. */}
+              <col style={{ width: 68 }} />     {/* Quantity */}
+              <col style={{ width: 56 }} />     {/* Rate */}
+              <col style={{ width: 76 }} />     {/* Amount */}
             </colgroup>
             <tbody>
               {/* Title row */}
               <tr>
-                <td colSpan={6} style={{ textAlign: 'center', fontSize: 20, fontWeight: 700, letterSpacing: 6, padding: '8px 0 4px', borderBottom: '1px solid #000' }}>
-                  ESTIMATE
+                <td colSpan={6} style={{ textAlign: 'center', fontSize: 13, fontWeight: 700, letterSpacing: 2, padding: '6px 0', borderBottom: '1px solid #000' }}>
+                  B I L L
                 </td>
               </tr>
 
-              {/* Company + Meta */}
+              {/* Meta details */}
               <tr>
-                <td colSpan={3} style={{ padding: '6px 10px', fontSize: 18, fontWeight: 700, verticalAlign: 'top', borderBottom: '1px solid #000', borderRight: '1px solid #000' }}>
-                  AB
+                {/* Left side: Site & Transport */}
+                <td colSpan={3} style={{ padding: '6px 10px', verticalAlign: 'top', borderBottom: '1px solid #000', borderRight: '1px solid #000' }}>
+                  <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+                    <tbody>
+                      {[
+                        ['Site', estimate.site_name],
+                        ['Transport', estimate.transport || ''],
+                      ].map(([label, val]) => (
+                        <tr key={label}>
+                          <td style={{ width: 64, fontWeight: 600, paddingBottom: 2 }}>{label}</td>
+                          <td style={{ width: 10, paddingBottom: 2 }}>:</td>
+                          <td style={{ fontWeight: label === 'Site' ? 700 : 400, paddingBottom: 2 }}>{val}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
                 </td>
+                {/* Right side: Date & No. */}
                 <td colSpan={3} style={{ padding: '6px 10px', verticalAlign: 'top', borderBottom: '1px solid #000' }}>
                   <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
                     <tbody>
                       {[
                         ['Date', estimate.bill_date],
                         ['No.', estimate.bill_number],
-                        ['Transport', estimate.transport || ''],
-                        ['Site', estimate.site_name],
                       ].map(([label, val]) => (
                         <tr key={label}>
-                          <td style={{ width: 72, fontWeight: 600, paddingBottom: 2 }}>{label}</td>
+                          <td style={{ width: 44, fontWeight: 600, paddingBottom: 2 }}>{label}</td>
                           <td style={{ width: 10, paddingBottom: 2 }}>:</td>
-                          <td style={{ fontWeight: label === 'Site' ? 700 : 400, paddingBottom: 2 }}>{val}</td>
+                          <td style={{ fontWeight: 400, paddingBottom: 2 }}>{val}</td>
                         </tr>
                       ))}
                     </tbody>
@@ -217,10 +238,11 @@ export default function EstimateView() {
               <tr style={{ background: '#f0f0f0' }}>
                 {['Sr No', 'Description of Goods', 'Nos.', 'Quantity', 'Rate', 'Amount'].map((h, i) => (
                   <td key={h} style={{
-                    border: '1px solid #000', padding: '6px 6px', fontWeight: 700,
+                    border: '1px solid #000', padding: '6px 4px', fontWeight: 700,
                     textAlign: i === 1 ? 'left' : 'center',
                     fontSize: 12,
-                    width: i === 0 ? 30 : i === 1 ? 'auto' : i === 2 ? 38 : i === 3 ? 88 : i === 4 ? 52 : 80
+                    whiteSpace: 'nowrap',
+                    width: i === 0 ? 42 : i === 1 ? 'auto' : i === 2 ? 42 : i === 3 ? 68 : i === 4 ? 56 : 76
                   }}>{h}</td>
                 ))}
               </tr>
@@ -228,27 +250,27 @@ export default function EstimateView() {
               {/* Items */}
               {items.map(it => (
                 <tr key={it.id}>
-                  <td style={{ border: '1px solid #000', padding: '5px 6px', textAlign: 'center', fontSize: 12 }}>{it.serial_number}</td>
-                  <td style={{ border: '1px solid #000', padding: '5px 6px', fontSize: 12 }}>{it.product_name_snapshot}</td>
-                  <td style={{ border: '1px solid #000', padding: '5px 6px', textAlign: 'center', fontSize: 12 }}>
+                  <td style={{ border: '1px solid #000', padding: '8px 6px', textAlign: 'center', fontSize: 12 }}>{it.serial_number}</td>
+                  <td style={{ border: '1px solid #000', padding: '8px 6px', fontSize: 12 }}>{it.product_name_snapshot}</td>
+                  <td style={{ border: '1px solid #000', padding: '8px 6px', textAlign: 'center', fontSize: 12 }}>
                     {it.calculation_type_snapshot === 'SQFT' ? it.nos : ''}
                   </td>
-                  <td style={{ border: '1px solid #000', padding: '5px 6px', textAlign: 'center', fontSize: 12 }}>
+                  <td style={{ border: '1px solid #000', padding: '8px 6px', textAlign: 'center', fontSize: 12 }}>
                     {it.quantity} {it.unit_snapshot}
                   </td>
-                  <td style={{ border: '1px solid #000', padding: '5px 6px', textAlign: 'right', fontSize: 12 }}>
+                  <td style={{ border: '1px solid #000', padding: '8px 6px', textAlign: 'right', fontSize: 12 }}>
                     {Number(it.rate).toFixed(2)}
                   </td>
-                  <td style={{ border: '1px solid #000', padding: '5px 6px', textAlign: 'right', fontSize: 12 }}>
+                  <td style={{ border: '1px solid #000', padding: '8px 6px', textAlign: 'right', fontSize: 12 }}>
                     {Number(it.amount).toFixed(2)}
                   </td>
                 </tr>
               ))}
 
               {/* Empty padding rows */}
-              {Array.from({ length: layoutMode === 'compact' ? 2 : Math.max(0, 12 - items.length) }).map((_, i) => (
+              {Array.from({ length: layoutMode === 'compact' ? 2 : Math.max(0, (paperSize === 'a5' ? 15 : 30) - items.length) }).map((_, i) => (
                 <tr key={`empty-${i}`}>
-                  <td style={{ border: '1px solid #000', height: 26 }}>&nbsp;</td>
+                  <td style={{ border: '1px solid #000', height: 35 }}>&nbsp;</td>
                   <td style={{ border: '1px solid #000' }} />
                   <td style={{ border: '1px solid #000' }} />
                   <td style={{ border: '1px solid #000' }} />
@@ -266,7 +288,7 @@ export default function EstimateView() {
                 <td style={{ border: '1px solid #000', padding: '6px 6px', textAlign: 'center', fontSize: 13 }}>
                   {totalQty % 1 === 0 ? totalQty : totalQty.toFixed(2)}
                 </td>
-                <td style={{ border: '1px solid #000', padding: '6px 6px', textAlign: 'right', fontSize: 13 }}>Gr.Total</td>
+                <td style={{ border: '1px solid #000', padding: '6px 4px', textAlign: 'right', fontSize: 13, whiteSpace: 'nowrap' }}>Gr.Total</td>
                 <td style={{ border: '1px solid #000', padding: '6px 6px', textAlign: 'right', fontSize: 14, fontWeight: 700 }}>
                   {grandTotal.toFixed(2)}
                 </td>
@@ -292,10 +314,14 @@ export default function EstimateView() {
             overflow: visible !important;
           }
           #print-area {
-            padding: 10mm !important;
+            padding: 0 !important;
             background: white !important;
             margin: 0 !important;
             box-sizing: border-box !important;
+          }
+          #estimate-preview {
+            max-width: none !important;
+            padding: 0 !important;
           }
           #estimate-preview table {
             width: 100% !important;

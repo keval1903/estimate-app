@@ -47,12 +47,14 @@ const EMPTY_ITEM = {
   product_id: null, product_name_snapshot: '',
   length_snapshot: null, width_snapshot: null,
   nos: '', quantity: '', unit_snapshot: '',
-  rate: '', calculation_type_snapshot: 'QUANTITY', amount: 0
+  rate: '', calculation_type_snapshot: 'QUANTITY', amount: 0,
+  has_stock: false, stock: 0
 }
 
 const EMPTY_PRODUCT_FORM = {
   product_name: '', length: '', width: '',
-  unit: '', rate: '', calculation_type: 'QUANTITY'
+  unit: '', rate: '', calculation_type: 'QUANTITY',
+  has_stock: false, stock: ''
 }
 const UNITS = ['Sq.Ft', 'Nos.', 'Kg.', 'Bundle', 'Rmt', 'Ltr', 'Pkt', 'Box', 'Set', 'Pair']
 
@@ -68,6 +70,7 @@ export default function CreateEstimate() {
   const [transport, setTransport] = useState('')
   const [siteName, setSiteName] = useState('')
   const [items, setItems] = useState([])
+  const [originalItems, setOriginalItems] = useState([])
   const [totals, setTotals] = useState({ total_nos: 0, total_quantity: 0, grand_total: 0 })
   const [existingBillNumber, setExistingBillNumber] = useState(null)
 
@@ -138,7 +141,7 @@ export default function CreateEstimate() {
           const { data: eitems } = await supabase
             .from('estimate_items').select('*')
             .eq('estimate_id', id).order('serial_number')
-          setItems((eitems || []).map(it => ({
+          const loadedItems = (eitems || []).map(it => ({
             id: it.id,
             product_id: it.product_id,
             product_name_snapshot: it.product_name_snapshot,
@@ -150,7 +153,9 @@ export default function CreateEstimate() {
             rate: it.rate,
             calculation_type_snapshot: it.calculation_type_snapshot,
             amount: it.amount
-          })))
+          }))
+          setItems(loadedItems)
+          setOriginalItems(loadedItems)
         }
         setExistingBillNumber(est.bill_number)
         setLoading(false)
@@ -215,7 +220,9 @@ export default function CreateEstimate() {
         calculation_type_snapshot: p.calculation_type,
         nos: p.calculation_type === 'SQFT' ? (f.nos || '') : '',
         quantity: p.calculation_type === 'QUANTITY' ? (f.quantity || '') : '',
-        amount: 0
+        amount: 0,
+        has_stock: p.has_stock || false,
+        stock: p.stock || 0
       }
       // recalc immediately
       const { quantity, amount } = calcItem(next)
@@ -292,9 +299,10 @@ export default function CreateEstimate() {
 
   // ── Create New Product ──
   function handleProductFormChange(e) {
-    const { name, value } = e.target
+    const { name, value, type, checked } = e.target
+    const val = type === 'checkbox' ? checked : value
     setProductForm(f => {
-      const next = { ...f, [name]: value }
+      const next = { ...f, [name]: val }
       if (name === 'unit') next.calculation_type = value === 'Sq.Ft' ? 'SQFT' : 'QUANTITY'
       if (name === 'calculation_type' && value === 'QUANTITY') { next.length = ''; next.width = '' }
       return next
@@ -309,6 +317,9 @@ export default function CreateEstimate() {
       if (!productForm.length || isNaN(productForm.length)) return 'Length required for Sq.Ft products'
       if (!productForm.width  || isNaN(productForm.width))  return 'Width required for Sq.Ft products'
     }
+    if (productForm.has_stock) {
+      if (productForm.stock === '' || isNaN(productForm.stock)) return 'Valid stock amount is required'
+    }
     return null
   }
 
@@ -322,12 +333,22 @@ export default function CreateEstimate() {
       calculation_type: productForm.calculation_type,
       length: productForm.calculation_type === 'SQFT' ? Number(productForm.length) : null,
       width:  productForm.calculation_type === 'SQFT' ? Number(productForm.width)  : null,
+      has_stock: productForm.has_stock,
+      stock: productForm.has_stock ? Number(productForm.stock) : 0,
       updated_at: new Date().toISOString()
     }
     
     const { data, error } = await supabase.from('products').insert(payload).select().single()
     setSavingProduct(false)
     if (error) { showToast('Save failed: ' + error.message, 'error'); return }
+    
+    if (payload.has_stock) {
+      await supabase.from('stock_history').insert({
+        product_id: data.id,
+        change_type: 'MANUAL_ADJUST',
+        quantity_changed: payload.stock
+      })
+    }
     
     showToast('Product added ✓')
     setAllProducts(prev => {
@@ -418,6 +439,40 @@ export default function CreateEstimate() {
         const { error: itemErr } = await supabase.from('estimate_items').insert(newItems)
         if (itemErr) throw itemErr
 
+        // Calculate and apply stock adjustments
+        const netUsage = {}
+        for (const it of items) {
+          const qty = it.calculation_type_snapshot === 'SQFT' ? (parseFloat(it.nos) || 0) : (parseFloat(it.quantity) || 0)
+          netUsage[it.product_id] = (netUsage[it.product_id] || 0) + qty
+        }
+        const origUsage = {}
+        if (isEdit) {
+          for (const oi of originalItems) {
+            const qty = oi.calculation_type_snapshot === 'SQFT' ? (parseFloat(oi.nos) || 0) : (parseFloat(oi.quantity) || 0)
+            origUsage[oi.product_id] = (origUsage[oi.product_id] || 0) + qty
+          }
+        }
+        for (const p of allProducts) {
+          if (p.has_stock) {
+            const curr = netUsage[p.id] || 0
+            const orig = origUsage[p.id] || 0
+            const diff = curr - orig
+            if (diff !== 0) {
+              const { data: pdata } = await supabase.from('products').select('stock').eq('id', p.id).single()
+              if (pdata) {
+                const newStock = Number(pdata.stock) - diff
+                await supabase.from('products').update({ stock: newStock }).eq('id', p.id)
+                await supabase.from('stock_history').insert({
+                  product_id: p.id,
+                  change_type: isEdit ? 'ESTIMATE_UPDATE' : 'ESTIMATE_DEDUCT',
+                  quantity_changed: -diff,
+                  estimate_id: id
+                })
+              }
+            }
+          }
+        }
+
         // save site if new
         await saveSite(siteName.trim().toUpperCase())
         localStorage.removeItem(draftKey) // clear draft on success
@@ -458,6 +513,40 @@ export default function CreateEstimate() {
         }))
         const { error: itemErr } = await supabase.from('estimate_items').insert(newItems)
         if (itemErr) throw itemErr
+
+        // Calculate and apply stock adjustments
+        const netUsage = {}
+        for (const it of items) {
+          const qty = it.calculation_type_snapshot === 'SQFT' ? (parseFloat(it.nos) || 0) : (parseFloat(it.quantity) || 0)
+          netUsage[it.product_id] = (netUsage[it.product_id] || 0) + qty
+        }
+        const origUsage = {}
+        if (isEdit) {
+          for (const oi of originalItems) {
+            const qty = oi.calculation_type_snapshot === 'SQFT' ? (parseFloat(oi.nos) || 0) : (parseFloat(oi.quantity) || 0)
+            origUsage[oi.product_id] = (origUsage[oi.product_id] || 0) + qty
+          }
+        }
+        for (const p of allProducts) {
+          if (p.has_stock) {
+            const curr = netUsage[p.id] || 0
+            const orig = origUsage[p.id] || 0
+            const diff = curr - orig
+            if (diff !== 0) {
+              const { data: pdata } = await supabase.from('products').select('stock').eq('id', p.id).single()
+              if (pdata) {
+                const newStock = Number(pdata.stock) - diff
+                await supabase.from('products').update({ stock: newStock }).eq('id', p.id)
+                await supabase.from('stock_history').insert({
+                  product_id: p.id,
+                  change_type: isEdit ? 'ESTIMATE_UPDATE' : 'ESTIMATE_DEDUCT',
+                  quantity_changed: -diff,
+                  estimate_id: isEdit ? id : est.id
+                })
+              }
+            }
+          }
+        }
 
         await saveSite(siteName.trim().toUpperCase())
         localStorage.removeItem(draftKey) // clear draft on success
@@ -665,6 +754,11 @@ export default function CreateEstimate() {
                 {itemForm.unit_snapshot} · {itemForm.calculation_type_snapshot}
                 {itemForm.calculation_type_snapshot === 'SQFT' &&
                   ` · ${itemForm.length_snapshot} × ${itemForm.width_snapshot} ft`}
+                {itemForm.has_stock && (
+                  <div style={{ marginTop: 4, color: itemForm.stock > 0 ? 'var(--primary-color)' : 'var(--danger-color)', fontWeight: 600 }}>
+                    Available Stock: {itemForm.stock}
+                  </div>
+                )}
               </div>
             )}
 
@@ -770,6 +864,19 @@ export default function CreateEstimate() {
                   <input name="width" type="number" inputMode="decimal"
                     value={productForm.width} onChange={handleProductFormChange} placeholder="e.g. 4" />
                 </div>
+              </div>
+            )}
+            <div className="field">
+              <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', fontWeight: 'bold' }}>
+                <input type="checkbox" name="has_stock" checked={!!productForm.has_stock} onChange={handleProductFormChange} style={{ width: 16, height: 16 }} />
+                Manage Stock for this product
+              </label>
+            </div>
+            {productForm.has_stock && (
+              <div className="field">
+                <label>Current Stock *</label>
+                <input name="stock" type="number" inputMode="decimal"
+                  value={productForm.stock} onChange={handleProductFormChange} placeholder="e.g. 100" />
               </div>
             )}
             <div style={{ display: 'flex', gap: 10, marginTop: 8 }}>
