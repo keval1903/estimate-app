@@ -213,6 +213,7 @@ export default function CreateEstimate() {
         unit_snapshot: p.unit,
         rate: p.rate,
         calculation_type_snapshot: p.calculation_type,
+        stock_quantity: p.stock_quantity ?? null,
         nos: p.calculation_type === 'SQFT' ? (f.nos || '') : '',
         quantity: p.calculation_type === 'QUANTITY' ? (f.quantity || '') : '',
         amount: 0
@@ -421,6 +422,30 @@ export default function CreateEstimate() {
         // save site if new
         await saveSite(siteName.trim().toUpperCase())
         localStorage.removeItem(draftKey) // clear draft on success
+        // Adjust stock for tracked products (deduct difference)
+        for (const it of newItems) {
+          if (!it.product_id) continue
+          const product = allProducts.find(p => p.id === it.product_id)
+          if (!product || product.stock_quantity === null || product.stock_quantity === undefined) continue
+          // find original quantity for this product in old estimate
+          const origItem = (await supabase.from('estimate_items').select('quantity')
+            .eq('estimate_id', id).eq('product_id', it.product_id).single())?.data
+          const origQty = parseFloat(origItem?.quantity) || 0
+          const newQty = parseFloat(it.quantity) || 0
+          const diff = newQty - origQty
+          if (diff === 0) continue
+          const newStock = Number(product.stock_quantity) - diff
+          await supabase.from('products').update({ stock_quantity: newStock }).eq('id', product.id)
+          if (diff > 0) {
+            await supabase.from('stock_ledger').insert({
+              product_id: product.id, product_name: product.product_name,
+              action: 'ESTIMATE', quantity: diff,
+              estimate_id: id, bill_number: existingBillNumber,
+              site_name: siteName.trim().toUpperCase(),
+              note: `Bill #${existingBillNumber} (edited)`
+            })
+          }
+        }        
         showToast('Estimate updated ✓')
         navigate(`/estimate/view/${id}`)
 
@@ -461,6 +486,25 @@ export default function CreateEstimate() {
 
         await saveSite(siteName.trim().toUpperCase())
         localStorage.removeItem(draftKey) // clear draft on success
+        // Deduct stock for tracked products
+        for (const it of newItems) {
+          if (!it.product_id) continue
+          const product = allProducts.find(p => p.id === it.product_id)
+          if (!product || product.stock_quantity === null || product.stock_quantity === undefined) continue
+          const deduct = parseFloat(it.quantity) || 0
+          const newStock = Number(product.stock_quantity) - deduct
+          await supabase.from('products').update({ stock_quantity: newStock }).eq('id', product.id)
+          await supabase.from('stock_ledger').insert({
+            product_id: product.id,
+            product_name: product.product_name,
+            action: 'ESTIMATE',
+            quantity: deduct,
+            estimate_id: est.id,
+            bill_number: billNumber,
+            site_name: siteName.trim().toUpperCase(),
+            note: `Bill #${billNumber}`
+          })
+        }        
         showToast('Estimate saved ✓')
         navigate(`/estimate/view/${est.id}`)
       }
@@ -665,6 +709,13 @@ export default function CreateEstimate() {
                 {itemForm.unit_snapshot} · {itemForm.calculation_type_snapshot}
                 {itemForm.calculation_type_snapshot === 'SQFT' &&
                   ` · ${itemForm.length_snapshot} × ${itemForm.width_snapshot} ft`}
+                {itemForm.stock_quantity !== null && itemForm.stock_quantity !== undefined && (
+                  <div style={{ marginTop: 6, fontWeight: 700,
+                    color: itemForm.stock_quantity <= 0 ? '#c0392b' : itemForm.stock_quantity < 10 ? '#e67e22' : '#1a5c2a' }}>
+                    📦 Stock: {itemForm.stock_quantity} {itemForm.unit_snapshot}
+                    {itemForm.stock_quantity <= 0 ? ' — Out of stock!' : itemForm.stock_quantity < 10 ? ' — Low stock!' : ''}
+                  </div>
+                )}                  
               </div>
             )}
 
