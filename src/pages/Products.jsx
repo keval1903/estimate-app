@@ -338,9 +338,6 @@ export default function Products() {
           onClick={() => setShowImport(true)}>⬆ Import</button>
           <button className="btn btn-sm"
             style={{ background: 'rgba(255,255,255,0.2)', color: '#fff', border: '1px solid rgba(255,255,255,0.4)' }}
-            onClick={handleExport}>⬇ Export</button>
-          <button className="btn btn-sm"
-            style={{ background: 'rgba(255,255,255,0.2)', color: '#fff', border: '1px solid rgba(255,255,255,0.4)' }}
             onClick={() => { setSelectMode(m => !m); setSelectedIds(new Set()) }}>
             {selectMode ? 'Cancel' : '☑ Select'}
           </button>
