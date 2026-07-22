@@ -38,6 +38,37 @@ export default function EstimateView() {
     return `Estimate No. ${estimate.bill_number}\nDate: ${estimate.bill_date}\nSite: ${estimate.site_name}${estimate.transport ? '\nTransport: ' + estimate.transport : ''}\nGrand Total: ₹${Number(estimate.grand_total).toLocaleString('en-IN', { minimumFractionDigits: 2 })}`
   }
 
+  async function generateCanvas(scale) {
+    const { default: html2canvas } = await import('html2canvas')
+    const el = previewRef.current
+    
+    // Temporarily force desktop width so mobile doesn't squish the columns
+    const originalWidth = el.style.width
+    const originalMaxWidth = el.style.maxWidth
+    el.style.width = '680px'
+    el.style.maxWidth = 'none'
+
+    const oldScroll = window.scrollY
+    window.scrollTo(0, 0)
+    // Force browser to recalculate layout synchronously without losing user gesture
+    void el.offsetHeight
+    
+    const canvas = await html2canvas(el, { 
+      scale, 
+      useCORS: true, 
+      backgroundColor: '#fff',
+      scrollX: 0,
+      scrollY: 0
+    })
+    
+    // Restore
+    el.style.width = originalWidth
+    el.style.maxWidth = originalMaxWidth
+    window.scrollTo(0, oldScroll)
+    
+    return canvas
+  }
+
   function handlePrint() {
     window.print()
   }
@@ -46,9 +77,7 @@ export default function EstimateView() {
     setExporting('pdf')
     try {
       const { default: jsPDF } = await import('jspdf')
-      const { default: html2canvas } = await import('html2canvas')
-      const el = previewRef.current
-      const canvas = await html2canvas(el, { scale: 2, useCORS: true, backgroundColor: '#fff', scrollY: -window.scrollY })
+      const canvas = await generateCanvas(2)
       const imgData = canvas.toDataURL('image/png')
       const pdf = new jsPDF({ orientation: 'portrait', unit: 'mm', format: paperSize })
       const pdfW = pdf.internal.pageSize.getWidth()
@@ -65,9 +94,7 @@ export default function EstimateView() {
   async function handleSaveImage() {
     setExporting('img')
     try {
-      const { default: html2canvas } = await import('html2canvas')
-      const el = previewRef.current
-      const canvas = await html2canvas(el, { scale: 3, useCORS: true, backgroundColor: '#fff', scrollY: -window.scrollY })
+      const canvas = await generateCanvas(3)
       const link = document.createElement('a')
       link.download = getFilename('png')
       link.href = canvas.toDataURL('image/png')
@@ -97,17 +124,14 @@ export default function EstimateView() {
 
   async function handleWhatsApp() {
     const text = getSummaryText()
-    // Try native share with image first (mobile)
+    
+    // Try native share with image first (mobile/HTTPS)
     if (navigator.share && navigator.canShare) {
       try {
-        const { default: html2canvas } = await import('html2canvas')
-        const el = previewRef.current
-        const canvas = await html2canvas(el, { scale: 3, useCORS: true, backgroundColor: '#fff', scrollY: -window.scrollY })
+        const canvas = await generateCanvas(3)
         canvas.toBlob(async (blob) => {
           const file = new File([blob], getFilename('png'), { type: 'image/png' })
           if (navigator.canShare({ files: [file] })) {
-            // Windows native share often drops the 'text' field when passing to WhatsApp Desktop. 
-            // We copy it to clipboard so the user can easily paste it as a caption.
             try { 
               await navigator.clipboard.writeText(text)
               showToast('Caption copied! Paste it in WhatsApp') 
@@ -116,13 +140,21 @@ export default function EstimateView() {
             await navigator.share({ files: [file], title: `Estimate #${estimate.bill_number}`, text })
             return
           }
-          // fallback to wa.me
-          window.open(`https://wa.me/?text=${encodeURIComponent(text)}`, '_blank')
         }, 'image/png')
         return
       } catch { }
     }
-    // Desktop: open WhatsApp Web with text
+    
+    // Fallback for HTTP (local network) where navigator.share is blocked by the browser
+    try {
+      const canvas = await generateCanvas(3)
+      const link = document.createElement('a')
+      link.download = getFilename('png')
+      link.href = canvas.toDataURL('image/png')
+      link.click()
+      showToast('Image saved! Please attach it in WhatsApp.', 'success', 4000)
+    } catch(e) {}
+
     window.open(`https://wa.me/?text=${encodeURIComponent(text)}`, '_blank')
   }
 
