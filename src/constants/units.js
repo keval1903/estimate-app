@@ -6,7 +6,6 @@ export const DEFAULT_UNITS = [
   'Bundle',
   'Rft',
   'Pcs',
-  'Dz',
   'Patti',
   'Ltr',
   'Pkt',

@@ -24,17 +24,17 @@ function calcItem(item) {
     const lVal = isNaN(L) ? 0 : L
     const wVal = isNaN(W) ? 0 : W
     const quantity = lVal * wVal * nos
-    const amount = quantity * rate
-    return { quantity: +quantity.toFixed(2), amount: +amount.toFixed(2) }
-  } else if (item.calculation_type_snapshot === 'INCH') {
+    const amount = Math.ceil(quantity * rate)
+    return { quantity: +quantity.toFixed(2), amount: amount }
+  } else if (item.calculation_type_snapshot === 'INCH' || item.calculation_type_snapshot === 'FEET') {
     const lVal = isNaN(L) || L <= 0 ? 1 : L
     const wVal = isNaN(W) || W <= 0 ? 1 : W
-    const amount = lVal * wVal * nos * rate
+    const amount = Math.ceil(lVal * wVal * nos * rate)
     const quantity = nos
-    return { quantity: +quantity.toFixed(2), amount: +amount.toFixed(2) }
+    return { quantity: +quantity.toFixed(2), amount: amount }
   } else {
-    const amount = qty * rate
-    return { quantity: qty, amount: +amount.toFixed(2) }
+    const amount = Math.ceil(qty * rate)
+    return { quantity: qty, amount: amount }
   }
 }
 
@@ -58,14 +58,14 @@ const EMPTY_ITEM = {
   product_id: null, product_name_snapshot: '',
   length_snapshot: null, width_snapshot: null,
   nos: '', quantity: '', unit_snapshot: '',
-  rate: '', calculation_type_snapshot: 'QUANTITY', amount: 0,
-  has_stock: false, stock: 0, remark: ''
+  rate: '', base_rate: '', discount_percent: '', calculation_type_snapshot: 'QUANTITY', amount: 0,
+  has_stock: false, stock: 0, has_remark: false, remark: '', has_discount: false, keyword_snapshot: ''
 }
 
 const EMPTY_PRODUCT_FORM = {
-  product_name: '', length: '', width: '',
+  product_name: '', keyword: '', length: '', width: '',
   unit: '', rate: '', calculation_type: 'QUANTITY',
-  has_stock: false, stock: ''
+  has_stock: false, stock: '', min_stock: '5', has_remark: false, has_discount: false
 }
 const UNITS = ['Sq.Ft', 'Nos.', 'Kg.', 'Bundle', 'Rmt', 'Ltr', 'Pkt', 'Box', 'Set', 'Pair']
 
@@ -95,6 +95,9 @@ export default function CreateEstimate() {
   const [saving, setSaving] = useState(false)
   const [showItemModal, setShowItemModal] = useState(false)
   const [editingItemIdx, setEditingItemIdx] = useState(null)
+  const [isDraftRestored, setIsDraftRestored] = useState(false)
+
+  const skipAutoSaveRef = useRef(false)
 
   // item modal state
   const [itemForm, setItemForm] = useState(EMPTY_ITEM)
@@ -147,9 +150,12 @@ export default function CreateEstimate() {
         
         if (parsedDraft) {
           setBillDate(parsedDraft.billDate)
-          setTransport(parsedDraft.transport || '')
+          setClientName(parsedDraft.clientName || parsedDraft.transport || '')
+          setClientMobile(parsedDraft.clientMobile || '')
+          setPreparedBy(parsedDraft.preparedBy || '')
           setSiteName(parsedDraft.siteName || '')
           setItems(parsedDraft.items || [])
+          setIsDraftRestored(true)
           setTimeout(() => showToast('Unsaved draft restored'), 500)
         } else {
           setBillDate(est.bill_date)
@@ -171,6 +177,7 @@ export default function CreateEstimate() {
             quantity: it.quantity ?? '',
             unit_snapshot: it.unit_snapshot,
             rate: it.rate,
+            discount_percent: it.discount_percent ?? '',
             calculation_type_snapshot: it.calculation_type_snapshot,
             amount: it.amount,
             remark: it.remark || ''
@@ -188,6 +195,7 @@ export default function CreateEstimate() {
           setPreparedBy(parsedDraft.preparedBy || '')
           setSiteName(parsedDraft.siteName || '')
           setItems(parsedDraft.items || [])
+          setIsDraftRestored(true)
           setTimeout(() => showToast('Unsaved draft restored'), 500)
         }
         setLoading(false)
@@ -199,11 +207,65 @@ export default function CreateEstimate() {
   // ── Auto-save draft ──
   useEffect(() => {
     if (!loading) {
+      if (skipAutoSaveRef.current) {
+        skipAutoSaveRef.current = false
+        return
+      }
       localStorage.setItem(draftKey, JSON.stringify({
         billDate, clientName, clientMobile, preparedBy, siteName, items
       }))
     }
   }, [billDate, clientName, clientMobile, preparedBy, siteName, items, draftKey, loading])
+
+  // ── Discard Draft & Reset ──
+  const handleDiscardDraft = async () => {
+    skipAutoSaveRef.current = true
+    localStorage.removeItem(draftKey)
+    setIsDraftRestored(false)
+
+    if (isEdit) {
+      setLoading(true)
+      const { data: est } = await supabase
+        .from('estimates').select('*').eq('id', id).single()
+      if (est) {
+        setBillDate(est.bill_date)
+        setClientName(est.client_name || est.transport || '')
+        setClientMobile(est.client_mobile || '')
+        setPreparedBy(est.prepared_by || '')
+        setSiteName(est.site_name || '')
+        setDocType(est.type || 'ESTIMATE')
+        const { data: eitems } = await supabase
+          .from('estimate_items').select('*')
+          .eq('estimate_id', id).order('serial_number')
+        const loadedItems = (eitems || []).map(it => ({
+          id: it.id,
+          product_id: it.product_id,
+          product_name_snapshot: it.product_name_snapshot,
+          length_snapshot: it.length_snapshot,
+          width_snapshot: it.width_snapshot,
+          nos: it.nos ?? '',
+          quantity: it.quantity ?? '',
+          unit_snapshot: it.unit_snapshot,
+          rate: it.rate,
+          calculation_type_snapshot: it.calculation_type_snapshot,
+          amount: it.amount,
+          remark: it.remark || ''
+        }))
+        setItems(loadedItems)
+        setOriginalItems(loadedItems)
+      }
+      setLoading(false)
+    } else {
+      setBillDate(todayIST())
+      setClientName('')
+      setClientMobile('')
+      setPreparedBy('')
+      setSiteName('')
+      setItems([])
+    }
+    localStorage.removeItem(draftKey)
+    showToast('Unsaved draft discarded')
+  }
 
   // ── Recalc totals when items change ──
   useEffect(() => { setTotals(calcTotals(items)) }, [items])
@@ -211,29 +273,36 @@ export default function CreateEstimate() {
   // ── Product search ──
   useEffect(() => {
     const q = productSearch.trim().toLowerCase()
-    if (!q) { setProductSuggestions([]); setSuggestionIdx(-1); return }
+    if (!q) { 
+      setProductSuggestions(allProducts.slice(0, 8))
+      setSuggestionIdx(-1)
+      return 
+    }
     const results = allProducts.filter(p =>
       p.product_name.toLowerCase().includes(q)
     ).slice(0, 8)
     setProductSuggestions(results)
-    setShowSuggestions(results.length > 0)
     setSuggestionIdx(-1)
   }, [productSearch, allProducts])
 
   // ── Site search ──
   useEffect(() => {
     const q = siteName.trim().toLowerCase()
-    if (!q) { setSiteSuggestions([]); setShowSiteSuggestions(false); return }
+    if (!q) { 
+      setSiteSuggestions(allSites.slice(0, 8))
+      return 
+    }
     const results = allSites.filter(s =>
       s.site_name.toLowerCase().includes(q)
-    ).slice(0, 5)
+    ).slice(0, 8)
     setSiteSuggestions(results)
-    setShowSiteSuggestions(results.length > 0)
   }, [siteName, allSites])
 
   // ── Select a product from suggestions ──
   function selectProduct(p) {
-    const isPieceBased = p.calculation_type === 'SQFT' || p.calculation_type === 'INCH'
+    const isPieceBased = p.calculation_type === 'SQFT' || p.calculation_type === 'INCH' || p.calculation_type === 'FEET'
+    const baseRate = parseFloat(p.rate) || 0
+
     setItemForm(f => {
       const next = {
         ...f,
@@ -242,13 +311,18 @@ export default function CreateEstimate() {
         length_snapshot: p.length,
         width_snapshot: p.width,
         unit_snapshot: p.unit,
-        rate: p.rate,
+        base_rate: baseRate,
+        discount_percent: '',
+        rate: baseRate,
         calculation_type_snapshot: p.calculation_type,
         nos: isPieceBased ? (f.nos || '') : '',
         quantity: p.calculation_type === 'QUANTITY' ? (f.quantity || '') : (f.nos || ''),
         amount: 0,
         has_stock: p.has_stock || false,
-        stock: p.stock || 0
+        stock: p.stock || 0,
+        has_remark: p.has_remark || false,
+        has_discount: p.has_discount || false,
+        keyword_snapshot: p.keyword || ''
       }
       // recalc immediately
       const { quantity, amount } = calcItem(next)
@@ -297,10 +371,16 @@ export default function CreateEstimate() {
     const { name, value } = e.target
     setItemForm(f => {
       const next = { ...f, [name]: value }
+      if (name === 'discount_percent') {
+        const disc = parseFloat(value) || 0
+        const base = parseFloat(next.base_rate) || parseFloat(next.rate) || 0
+        const calcRate = disc > 0 ? +(base * (1 - disc / 100)).toFixed(2) : base
+        next.rate = calcRate
+      }
       const { quantity, amount } = calcItem(next)
       if (next.calculation_type_snapshot === 'SQFT') {
         next.quantity = quantity
-      } else if (next.calculation_type_snapshot === 'INCH') {
+      } else if (next.calculation_type_snapshot === 'INCH' || next.calculation_type_snapshot === 'FEET') {
         next.quantity = parseFloat(next.nos) || 0
       }
       next.amount = amount
@@ -326,10 +406,17 @@ export default function CreateEstimate() {
   function openEditItem(idx) {
     const it = items[idx]
     const p = allProducts.find(prod => prod.id === it.product_id)
+    const baseRate = p ? (parseFloat(p.rate) || parseFloat(it.rate)) : parseFloat(it.rate)
+    const discPercent = it.discount_percent !== undefined && it.discount_percent !== '' ? it.discount_percent : 0
     setItemForm({
       ...it,
+      base_rate: baseRate,
+      discount_percent: discPercent ? String(discPercent) : '',
       has_stock: p ? p.has_stock : (it.has_stock || false),
-      stock: p ? p.stock : (it.stock || 0)
+      stock: p ? p.stock : (it.stock || 0),
+      has_remark: p ? p.has_remark : (it.has_remark || false),
+      has_discount: p ? p.has_discount : (Boolean(discPercent) || false),
+      keyword_snapshot: p ? (p.keyword || '') : ''
     })
     setProductSearch(it.product_name_snapshot)
     setEditingItemIdx(idx)
@@ -352,7 +439,7 @@ export default function CreateEstimate() {
     if (!productForm.product_name.trim()) return 'Product name is required'
     if (!productForm.unit.trim()) return 'Unit is required'
     if (!productForm.rate || isNaN(productForm.rate) || Number(productForm.rate) < 0) return 'Valid rate is required'
-    if (productForm.calculation_type === 'SQFT' || productForm.calculation_type === 'INCH') {
+    if (productForm.calculation_type === 'SQFT' || productForm.calculation_type === 'INCH' || productForm.calculation_type === 'FEET') {
       if (!productForm.length || isNaN(productForm.length)) return 'Length is required'
       if (!productForm.width  || isNaN(productForm.width))  return 'Width is required'
     }
@@ -366,7 +453,7 @@ export default function CreateEstimate() {
     const err = validateProduct()
     if (err) { showToast(err, 'error'); return }
     setSavingProduct(true)
-    const isDimensionBased = productForm.calculation_type === 'SQFT' || productForm.calculation_type === 'INCH'
+    const isDimensionBased = productForm.calculation_type === 'SQFT' || productForm.calculation_type === 'INCH' || productForm.calculation_type === 'FEET'
     const payload = {
       product_name: productForm.product_name.trim().toUpperCase(),
       unit: productForm.unit.trim(), rate: Number(productForm.rate),
@@ -376,6 +463,9 @@ export default function CreateEstimate() {
       has_stock: productForm.has_stock,
       stock: productForm.has_stock ? Number(productForm.stock) : 0,
       min_stock: productForm.has_stock ? Number(productForm.min_stock || 5) : 5,
+      has_remark: productForm.has_remark,
+      has_discount: productForm.has_discount,
+      keyword: productForm.keyword ? productForm.keyword.trim() : null,
       updated_at: new Date().toISOString()
     }
     
@@ -407,7 +497,7 @@ export default function CreateEstimate() {
     const rate = parseFloat(itemForm.rate)
     if (!rate || rate <= 0) { showToast('Enter a valid rate', 'error'); return }
 
-    const isPieceBased = itemForm.calculation_type_snapshot === 'SQFT' || itemForm.calculation_type_snapshot === 'INCH'
+    const isPieceBased = itemForm.calculation_type_snapshot === 'SQFT' || itemForm.calculation_type_snapshot === 'INCH' || itemForm.calculation_type_snapshot === 'FEET'
 
     if (isPieceBased) {
       if (!itemForm.nos || parseFloat(itemForm.nos) <= 0) {
@@ -428,7 +518,7 @@ export default function CreateEstimate() {
         .filter((_, idx) => idx !== editingItemIdx)
         .filter(it => it.product_id === itemForm.product_id)
         .reduce((sum, it) => {
-          const itPieceBased = it.calculation_type_snapshot === 'SQFT' || it.calculation_type_snapshot === 'INCH'
+          const itPieceBased = it.calculation_type_snapshot === 'SQFT' || it.calculation_type_snapshot === 'INCH' || it.calculation_type_snapshot === 'FEET'
           return sum + (itPieceBased ? (parseFloat(it.nos) || 0) : (parseFloat(it.quantity) || 0))
         }, 0)
       
@@ -506,6 +596,7 @@ export default function CreateEstimate() {
           quantity: parseFloat(it.quantity) || null,
           unit_snapshot: it.unit_snapshot,
           rate: parseFloat(it.rate),
+          discount_percent: parseFloat(it.discount_percent) || 0,
           calculation_type_snapshot: it.calculation_type_snapshot,
           amount: it.amount,
           remark: it.remark ? it.remark.trim() : null
@@ -588,6 +679,7 @@ export default function CreateEstimate() {
           quantity: parseFloat(it.quantity) || null,
           unit_snapshot: it.unit_snapshot,
           rate: parseFloat(it.rate),
+          discount_percent: parseFloat(it.discount_percent) || 0,
           calculation_type_snapshot: it.calculation_type_snapshot,
           amount: it.amount,
           remark: it.remark ? it.remark.trim() : null
@@ -664,6 +756,35 @@ export default function CreateEstimate() {
       </div>
 
       <div className="page">
+
+        {/* Unsaved draft banner */}
+        {isDraftRestored && (
+          <div style={{
+            background: 'var(--card-bg, #ffffff)',
+            border: '1px solid var(--accent, #3b82f6)',
+            borderRadius: 10,
+            padding: '12px 14px',
+            marginBottom: 16,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: 12,
+            boxShadow: '0 2px 8px rgba(0,0,0,0.05)'
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 14, fontWeight: 500 }}>
+              <span style={{ fontSize: 16 }}>📝</span>
+              <span>Restored unsaved draft</span>
+            </div>
+            <button
+              type="button"
+              className="btn btn-sm btn-danger"
+              onClick={handleDiscardDraft}
+              style={{ fontSize: 13, padding: '6px 12px', flexShrink: 0 }}
+            >
+              🗑️ Discard Draft
+            </button>
+          </div>
+        )}
 
         {/* Bill info */}
         <div className="card">
@@ -766,7 +887,7 @@ export default function CreateEstimate() {
               {idx + 1}. {it.product_name_snapshot}{it.remark ? ` - ${it.remark}` : ''}
             </div>
             <div className="item-grid">
-              {it.calculation_type_snapshot === 'SQFT' || it.calculation_type_snapshot === 'INCH' ? (
+              {it.calculation_type_snapshot === 'SQFT' ? (
                 <>
                   <div><span style={{ color: 'var(--text-muted)', fontSize: 12 }}>NOS</span><br />{it.nos}</div>
                   <div><span style={{ color: 'var(--text-muted)', fontSize: 12 }}>QTY</span><br />{it.quantity} {it.unit_snapshot}</div>
@@ -852,7 +973,7 @@ export default function CreateEstimate() {
                           <div style={{ fontWeight: 600 }}>{p.product_name}</div>
                           <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>
                             {p.unit} · ₹{p.rate} · {p.calculation_type}
-                            {p.calculation_type === 'SQFT' && ` · ${p.length}×${p.width} ft`}
+                            {(p.calculation_type === 'SQFT' || p.calculation_type === 'INCH' || p.calculation_type === 'FEET') && ` · ${p.length}×${p.width} ${p.calculation_type === 'INCH' || p.calculation_type === 'FEET' ? (p.calculation_type === 'FEET' ? 'ft' : 'in') : 'ft'}`}
                           </div>
                         </div>
                       ))}
@@ -872,7 +993,7 @@ export default function CreateEstimate() {
                 <strong>{itemForm.product_name_snapshot}</strong><br />
                 {itemForm.unit_snapshot} · {itemForm.calculation_type_snapshot}
                 {Boolean(itemForm.length_snapshot && itemForm.width_snapshot) &&
-                  ` · ${itemForm.length_snapshot} × ${itemForm.width_snapshot}`}
+                  ` · ${itemForm.length_snapshot} × ${itemForm.width_snapshot} ${itemForm.calculation_type_snapshot === 'INCH' || itemForm.calculation_type_snapshot === 'FEET' ? (itemForm.calculation_type_snapshot === 'FEET' ? 'ft' : 'in') : 'ft'}`}
                 {itemForm.has_stock && (
                   <div style={{ marginTop: 4, color: itemForm.stock > 0 ? 'var(--primary-color)' : 'var(--danger-color)', fontWeight: 600 }}>
                     Available Stock: {itemForm.stock} {itemForm.unit_snapshot}
@@ -880,9 +1001,15 @@ export default function CreateEstimate() {
                 )}
               </div>
             )}
+            
+            {itemForm.keyword_snapshot && (
+              <div style={{ background: '#fff3cd', color: '#856404', border: '1px solid #ffeeba', borderRadius: 8, padding: '8px 12px', marginBottom: 16, fontSize: 13, fontWeight: 700, textAlign: 'center', textTransform: 'uppercase' }}>
+                {itemForm.keyword_snapshot}
+              </div>
+            )}
 
-            {/* Nos (SQFT and INCH) */}
-            {(itemForm.calculation_type_snapshot === 'SQFT' || itemForm.calculation_type_snapshot === 'INCH') && (
+            {/* Nos (SQFT and INCH/FEET) */}
+            {(itemForm.calculation_type_snapshot === 'SQFT' || itemForm.calculation_type_snapshot === 'INCH' || itemForm.calculation_type_snapshot === 'FEET') && (
               <div className="field">
                 <label>Nos. (Number of Pieces / Units) *</label>
                 <input name="nos" type="number" inputMode="decimal"
@@ -895,7 +1022,7 @@ export default function CreateEstimate() {
                     {itemForm.calculation_type_snapshot === 'SQFT' ? (
                       `${itemForm.length_snapshot} × ${itemForm.width_snapshot} × ${itemForm.nos} = ${(itemForm.length_snapshot * itemForm.width_snapshot * (parseFloat(itemForm.nos)||0)).toFixed(2)} Sq.Ft`
                     ) : (
-                      `${itemForm.length_snapshot} × ${itemForm.width_snapshot} × ${itemForm.nos} × ₹${itemForm.rate} = ₹${(itemForm.length_snapshot * itemForm.width_snapshot * (parseFloat(itemForm.nos)||0) * (parseFloat(itemForm.rate)||0)).toFixed(2)} (Qty: ${itemForm.nos} ${itemForm.unit_snapshot})`
+                      `${itemForm.length_snapshot} × ${itemForm.width_snapshot} × ${itemForm.nos} × ₹${itemForm.rate} = ₹${Math.ceil(itemForm.length_snapshot * itemForm.width_snapshot * (parseFloat(itemForm.nos)||0) * (parseFloat(itemForm.rate)||0)).toLocaleString('en-IN')} (Qty: ${itemForm.nos} ${itemForm.unit_snapshot})`
                     )}
                   </div>
                 )}
@@ -914,6 +1041,22 @@ export default function CreateEstimate() {
               </div>
             )}
 
+            {/* Discount (%) field */}
+            {(itemForm.has_discount || Boolean(parseFloat(itemForm.discount_percent))) && (
+              <div className="field">
+                <label>Discount (%)</label>
+                <input name="discount_percent" type="number" inputMode="decimal"
+                  value={itemForm.discount_percent || ''} onChange={handleItemChange}
+                  onKeyDown={handleInputKeyDown}
+                  placeholder="e.g. 10" />
+                {itemForm.base_rate > 0 && parseFloat(itemForm.discount_percent) > 0 && (
+                  <div style={{ fontSize: 13, color: 'var(--primary-color)', marginTop: 4, fontWeight: 600 }}>
+                    Master Rate: ₹{Number(itemForm.base_rate).toFixed(2)} − {itemForm.discount_percent}% = Rate: ₹{Number(itemForm.rate).toFixed(2)}
+                  </div>
+                )}
+              </div>
+            )}
+
             {/* Rate */}
             <div className="field">
               <label>Rate (₹) *</label>
@@ -923,13 +1066,15 @@ export default function CreateEstimate() {
                 placeholder="0.00" />
             </div>
 
-            {/* Remark */}
-            <div className="field">
-              <label>Remark / Extra Note (Optional)</label>
-              <input name="remark" value={itemForm.remark || ''} onChange={handleItemChange}
-                onKeyDown={handleInputKeyDown}
-                placeholder="e.g. Soft Close, Gloss Finish (optional)" />
-            </div>
+            {/* Remark (shown if enabled for product or already set) */}
+            {(itemForm.has_remark || Boolean(itemForm.remark)) && (
+              <div className="field">
+                <label>Remark / Extra Note (Optional)</label>
+                <input name="remark" value={itemForm.remark || ''} onChange={handleItemChange}
+                  onKeyDown={handleInputKeyDown}
+                  placeholder="e.g. Soft Close, Gloss Finish (optional)" />
+              </div>
+            )}
 
             {/* Calculated amount preview */}
             {itemForm.amount > 0 && (
@@ -956,11 +1101,16 @@ export default function CreateEstimate() {
               <span>Add New Product</span>
               <button className="btn btn-ghost" onClick={() => setShowProductModal(false)}>✕</button>
             </div>
-            <div className="field">
-              <label>Product Name *</label>
-              <input name="product_name" value={productForm.product_name} onChange={handleProductFormChange}
-                placeholder="e.g. C PLY 4 18 MM 7 x 4" style={{ textTransform: 'uppercase' }} />
-            </div>
+              <div className="field">
+                <label>Product Name *</label>
+                <input name="product_name" value={productForm.product_name} onChange={handleProductFormChange}
+                  placeholder="e.g. C PLY 4 18 MM 7 x 4" style={{ textTransform:'uppercase' }} autoFocus />
+              </div>
+              <div className="field">
+                <label>Highlight Keyword (Optional)</label>
+                <input name="keyword" value={productForm.keyword || ''} onChange={handleProductFormChange}
+                  placeholder="e.g. PLYWOOD or SPECIAL OFFER" />
+              </div>
             <div className="field-row">
               <div className="field">
                 <label>Unit *</label>
@@ -990,6 +1140,8 @@ export default function CreateEstimate() {
                 <select name="calculation_type" value={productForm.calculation_type} onChange={handleProductFormChange}>
                   <option value="QUANTITY">QUANTITY</option>
                   <option value="SQFT">SQFT</option>
+                  <option value="INCH">INCH</option>
+                  <option value="FEET">FEET</option>
                 </select>
               </div>
             </div>
@@ -998,17 +1150,17 @@ export default function CreateEstimate() {
               <input name="rate" type="number" inputMode="decimal"
                 value={productForm.rate} onChange={handleProductFormChange} placeholder="0.00" />
             </div>
-            {productForm.calculation_type === 'SQFT' && (
+            {(productForm.calculation_type === 'SQFT' || productForm.calculation_type === 'INCH' || productForm.calculation_type === 'FEET') && (
               <div className="field-row">
                 <div className="field">
-                  <label>Length (ft) *</label>
+                  <label>Length ({productForm.calculation_type === 'INCH' || productForm.calculation_type === 'FEET' ? (productForm.calculation_type === 'FEET' ? 'ft' : 'in') : 'ft'}) *</label>
                   <input name="length" type="number" inputMode="decimal"
-                    value={productForm.length} onChange={handleProductFormChange} placeholder="e.g. 7" />
+                    value={productForm.length} onChange={handleProductFormChange} placeholder="e.g. 12" />
                 </div>
                 <div className="field">
-                  <label>Width (ft) *</label>
+                  <label>Width ({productForm.calculation_type === 'INCH' || productForm.calculation_type === 'FEET' ? (productForm.calculation_type === 'FEET' ? 'ft' : 'in') : 'ft'}) *</label>
                   <input name="width" type="number" inputMode="decimal"
-                    value={productForm.width} onChange={handleProductFormChange} placeholder="e.g. 4" />
+                    value={productForm.width} onChange={handleProductFormChange} placeholder="e.g. 8" />
                 </div>
               </div>
             )}
@@ -1018,11 +1170,31 @@ export default function CreateEstimate() {
                 Manage Stock for this product
               </label>
             </div>
+            <div className="field">
+              <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', fontWeight: 'bold' }}>
+                <input type="checkbox" name="has_remark" checked={!!productForm.has_remark} onChange={handleProductFormChange} style={{ width: 16, height: 16 }} />
+                Ask Remark / Extra Note for this product
+              </label>
+            </div>
+            <div className="field">
+              <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', fontWeight: 'bold' }}>
+                <input type="checkbox" name="has_discount" checked={!!productForm.has_discount} onChange={handleProductFormChange} style={{ width: 16, height: 16 }} />
+                Allow Discount for this product
+              </label>
+            </div>
             {productForm.has_stock && (
               <div className="field">
                 <label>Current Stock *</label>
                 <input name="stock" type="number" inputMode="decimal"
                   value={productForm.stock} onChange={handleProductFormChange} placeholder="e.g. 100" />
+                <div style={{ marginTop: 12 }}>
+                  <label>Minimum Stock Level * (Reorder Alert Limit)</label>
+                  <input name="min_stock" type="number" inputMode="decimal"
+                    value={productForm.min_stock} onChange={handleProductFormChange} placeholder="e.g. 5" />
+                  <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 4 }}>
+                    Alert is triggered when stock falls below this quantity
+                  </div>
+                </div>
               </div>
             )}
             <div style={{ display: 'flex', gap: 10, marginTop: 8 }}>

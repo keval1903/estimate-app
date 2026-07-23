@@ -456,7 +456,7 @@ body {
   border-radius: 30px;
   font-size: 14px;
   font-weight: 600;
-  z-index: 999;
+  z-index: 99999;
   white-space: nowrap;
   animation: fadeInUp 0.2s ease;
 }

@@ -49,7 +49,7 @@ export default function EstimateView() {
   async function generateCanvas(scale) {
     const { default: html2canvas } = await import('html2canvas')
     const el = previewRef.current
-    
+
     // Temporarily force desktop width so mobile doesn't squish the columns
     const originalWidth = el.style.width
     const originalMaxWidth = el.style.maxWidth
@@ -60,20 +60,20 @@ export default function EstimateView() {
     window.scrollTo(0, 0)
     // Force browser to recalculate layout synchronously without losing user gesture
     void el.offsetHeight
-    
-    const canvas = await html2canvas(el, { 
-      scale, 
-      useCORS: true, 
+
+    const canvas = await html2canvas(el, {
+      scale,
+      useCORS: true,
       backgroundColor: '#fff',
       scrollX: 0,
       scrollY: 0
     })
-    
+
     // Restore
     el.style.width = originalWidth
     el.style.maxWidth = originalMaxWidth
     window.scrollTo(0, oldScroll)
-    
+
     return canvas
   }
 
@@ -89,8 +89,21 @@ export default function EstimateView() {
       const imgData = canvas.toDataURL('image/png')
       const pdf = new jsPDF({ orientation: 'portrait', unit: 'mm', format: paperSize })
       const pdfW = pdf.internal.pageSize.getWidth()
-      const pdfH = (canvas.height * pdfW) / canvas.width
-      pdf.addImage(imgData, 'PNG', 0, 0, pdfW, pdfH)
+      const pageH = pdf.internal.pageSize.getHeight()
+      const imgH = (canvas.height * pdfW) / canvas.width
+      
+      let heightLeft = imgH
+      let position = 0
+
+      pdf.addImage(imgData, 'PNG', 0, position, pdfW, imgH)
+      heightLeft -= pageH
+
+      while (heightLeft > 0) {
+        position -= pageH
+        pdf.addPage()
+        pdf.addImage(imgData, 'PNG', 0, position, pdfW, imgH)
+        heightLeft -= pageH
+      }
       pdf.save(getFilename('pdf'))
       showToast('PDF saved ✓')
     } catch (e) {
@@ -132,27 +145,44 @@ export default function EstimateView() {
 
   async function handleWhatsApp() {
     const text = getSummaryText()
-    
+
     // Try native share with image first (mobile/HTTPS)
     if (navigator.share && navigator.canShare) {
       try {
         const canvas = await generateCanvas(3)
-        canvas.toBlob(async (blob) => {
-          const file = new File([blob], getFilename('png'), { type: 'image/png' })
-          if (navigator.canShare({ files: [file] })) {
-            try { 
-              await navigator.clipboard.writeText(text)
-              showToast('Caption copied! Paste it in WhatsApp') 
-            } catch(e) {}
-            
-            await navigator.share({ files: [file], title: `Estimate #${estimate.bill_number}`, text })
-            return
-          }
-        }, 'image/png')
-        return
+        const files = []
+        const ratio = paperSize === 'a5' ? (210 / 148) : (297 / 210)
+        const pageHeight = canvas.width * ratio
+        let heightLeft = canvas.height
+        let position = 0
+        let pageNum = 1
+
+        while (heightLeft > 0) {
+          const sliceHeight = Math.min(pageHeight, heightLeft)
+          const sliceCanvas = document.createElement('canvas')
+          sliceCanvas.width = canvas.width
+          sliceCanvas.height = sliceHeight
+          const ctx = sliceCanvas.getContext('2d')
+          ctx.drawImage(canvas, 0, position, canvas.width, sliceHeight, 0, 0, canvas.width, sliceHeight)
+          const blob = await new Promise(res => sliceCanvas.toBlob(res, 'image/png'))
+          files.push(new File([blob], getFilename('png').replace('.png', `_page${pageNum}.png`), { type: 'image/png' }))
+          heightLeft -= pageHeight
+          position += pageHeight
+          pageNum++
+        }
+
+        if (navigator.canShare({ files })) {
+          try {
+            await navigator.clipboard.writeText(text)
+            showToast('Caption copied! Paste it in WhatsApp')
+          } catch (e) { }
+
+          await navigator.share({ files, title: `Estimate #${estimate.bill_number}`, text })
+          return
+        }
       } catch { }
     }
-    
+
     // Fallback for HTTP (local network) where navigator.share is blocked by the browser
     try {
       const canvas = await generateCanvas(3)
@@ -161,7 +191,7 @@ export default function EstimateView() {
       link.href = canvas.toDataURL('image/png')
       link.click()
       showToast('Image saved! Please attach it in WhatsApp.', 'success', 4000)
-    } catch(e) {}
+    } catch (e) { }
 
     window.open(`https://wa.me/?text=${encodeURIComponent(text)}`, '_blank')
   }
@@ -178,7 +208,7 @@ export default function EstimateView() {
       for (const it of items) {
         if (it.product_id && prodMap[it.product_id] && prodMap[it.product_id].has_stock) {
           const p = prodMap[it.product_id]
-          const reqQty = it.calculation_type_snapshot === 'SQFT' ? (parseFloat(it.nos) || 0) : (parseFloat(it.quantity) || 0)
+          const reqQty = (it.calculation_type_snapshot === 'SQFT' || it.calculation_type_snapshot === 'INCH' || it.calculation_type_snapshot === 'FEET') ? (parseFloat(it.nos) || 0) : (parseFloat(it.quantity) || 0)
           const avail = Number(p.stock || 0)
           if (reqQty > avail) {
             showToast(`Cannot convert! Insufficient stock for ${p.product_name}. Required: ${reqQty} ${p.unit}, Available: ${avail} ${p.unit}.`, 'error')
@@ -191,7 +221,7 @@ export default function EstimateView() {
       // 2. Perform stock deduction
       for (const it of items) {
         if (it.product_id && prodMap[it.product_id] && prodMap[it.product_id].has_stock) {
-          const qty = it.calculation_type_snapshot === 'SQFT' ? (parseFloat(it.nos) || 0) : (parseFloat(it.quantity) || 0)
+          const qty = (it.calculation_type_snapshot === 'SQFT' || it.calculation_type_snapshot === 'INCH' || it.calculation_type_snapshot === 'FEET') ? (parseFloat(it.nos) || 0) : (parseFloat(it.quantity) || 0)
           if (qty > 0) {
             const p = prodMap[it.product_id]
             const newStock = Number(p.stock) - qty
@@ -253,7 +283,7 @@ export default function EstimateView() {
             <option value="compact">Layout: Compact</option>
           </select>
         </div>
-        
+
         {estimate.type === 'QUOTATION' && (
           <button className="btn btn-warning btn-sm"
             onClick={handleConvertToEstimate} disabled={converting}>
@@ -307,7 +337,7 @@ export default function EstimateView() {
                       {[
                         ['Site', estimate.site_name],
                         ['Client', estimate.client_name || estimate.transport || ''],
-                        ['M.', estimate.client_mobile || ''],
+                        ['Mobile', estimate.client_mobile || ''],
                       ].map(([label, val]) => (
                         <tr key={label}>
                           <td style={{ width: 52, fontWeight: 600, paddingBottom: 2 }}>{label}</td>
@@ -354,29 +384,29 @@ export default function EstimateView() {
               {/* Items */}
               {items.map(it => (
                 <tr key={it.id}>
-                  <td style={{ border: '1px solid #000', padding: '8px 6px', textAlign: 'center', fontSize: 12 }}>{it.serial_number}</td>
-                  <td style={{ border: '1px solid #000', padding: '8px 6px', fontSize: 12 }}>
+                  <td style={{ border: '1px solid #000', padding: '2px 4px', textAlign: 'center', fontSize: 12 }}>{it.serial_number}</td>
+                  <td style={{ border: '1px solid #000', padding: '2px 4px', fontSize: 12 }}>
                     {it.product_name_snapshot}{it.remark ? ` - ${it.remark}` : ''}
                   </td>
-                  <td style={{ border: '1px solid #000', padding: '8px 6px', textAlign: 'center', fontSize: 12 }}>
+                  <td style={{ border: '1px solid #000', padding: '2px 4px', textAlign: 'center', fontSize: 12 }}>
                     {it.calculation_type_snapshot === 'SQFT' ? it.nos : ''}
                   </td>
-                  <td style={{ border: '1px solid #000', padding: '8px 6px', textAlign: 'center', fontSize: 12 }}>
+                  <td style={{ border: '1px solid #000', padding: '2px 4px', textAlign: 'center', fontSize: 12 }}>
                     {it.quantity} {it.unit_snapshot}
                   </td>
-                  <td style={{ border: '1px solid #000', padding: '8px 6px', textAlign: 'right', fontSize: 12 }}>
+                  <td style={{ border: '1px solid #000', padding: '2px 4px', textAlign: 'right', fontSize: 12 }}>
                     {Number(it.rate).toFixed(2)}
                   </td>
-                  <td style={{ border: '1px solid #000', padding: '8px 6px', textAlign: 'right', fontSize: 12 }}>
+                  <td style={{ border: '1px solid #000', padding: '2px 4px', textAlign: 'right', fontSize: 12 }}>
                     {Number(it.amount).toFixed(2)}
                   </td>
                 </tr>
               ))}
 
               {/* Empty padding rows */}
-              {Array.from({ length: layoutMode === 'compact' ? 2 : Math.max(0, (paperSize === 'a5' ? 17 : 34) - items.length) }).map((_, i) => (
+              {Array.from({ length: layoutMode === 'compact' ? 2 : Math.max(0, (paperSize === 'a5' ? 20 : 40) - items.length) }).map((_, i) => (
                 <tr key={`empty-${i}`}>
-                  <td style={{ border: '1px solid #000', height: 35 }}>&nbsp;</td>
+                  <td style={{ border: '1px solid #000', height: 26 }}>&nbsp;</td>
                   <td style={{ border: '1px solid #000' }} />
                   <td style={{ border: '1px solid #000' }} />
                   <td style={{ border: '1px solid #000' }} />
@@ -427,7 +457,7 @@ export default function EstimateView() {
           }
           #estimate-preview {
             max-width: none !important;
-            padding: 4mm 4mm 0 4mm !important;
+            padding: 4mm 4mm 15mm 4mm !important;
           }
           #estimate-preview table {
             width: 100% !important;

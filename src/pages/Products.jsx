@@ -6,9 +6,10 @@ import { useToast } from '../hooks/useToast.jsx'
 import { getMergedUnits } from '../constants/units.js'
 
 const EMPTY_FORM = {
-  product_name: '', length: '', width: '',
+  product_name: '', keyword: '', length: '', width: '',
   unit: '', rate: '', calculation_type: 'QUANTITY',
-  has_stock: false, stock: '', add_stock: '', min_stock: '5'
+  has_stock: false, stock: '', add_stock: '', min_stock: '5',
+  has_remark: false, has_discount: false
 }
 
 export default function Products() {
@@ -59,11 +60,13 @@ export default function Products() {
 
   function openEdit(p) {
     setForm({
-      product_name: p.product_name, length: p.length ?? '',
+      product_name: p.product_name, keyword: p.keyword ?? '', length: p.length ?? '',
       width: p.width ?? '', unit: p.unit, rate: p.rate,
       calculation_type: p.calculation_type,
       has_stock: p.has_stock || false, stock: p.stock ?? '', add_stock: '',
-      min_stock: p.min_stock ?? 5
+      min_stock: p.min_stock ?? 5,
+      has_remark: p.has_remark || false,
+      has_discount: p.has_discount || false
     })
     setEditingId(p.id); setStockMode('ADD'); setShowCustomUnit(false); setShowModal(true)
   }
@@ -83,7 +86,7 @@ export default function Products() {
     if (!form.product_name.trim()) return 'Product name is required'
     if (!form.unit.trim()) return 'Unit is required'
     if (!form.rate || isNaN(form.rate) || Number(form.rate) < 0) return 'Valid rate is required'
-    if (form.calculation_type === 'SQFT' || form.calculation_type === 'INCH') {
+    if (form.calculation_type === 'SQFT' || form.calculation_type === 'INCH' || form.calculation_type === 'FEET') {
       if (!form.length || isNaN(form.length)) return 'Length is required'
       if (!form.width  || isNaN(form.width))  return 'Width is required'
     }
@@ -123,9 +126,10 @@ export default function Products() {
       }
     }
 
-    const isDimensionBased = form.calculation_type === 'SQFT' || form.calculation_type === 'INCH'
+    const isDimensionBased = form.calculation_type === 'SQFT' || form.calculation_type === 'INCH' || form.calculation_type === 'FEET'
     const payload = {
       product_name: form.product_name.trim().toUpperCase(),
+      keyword: form.keyword ? form.keyword.trim() : null,
       unit: form.unit.trim(), rate: Number(form.rate),
       calculation_type: form.calculation_type,
       length: isDimensionBased && form.length ? Number(form.length) : null,
@@ -133,6 +137,8 @@ export default function Products() {
       has_stock: form.has_stock,
       stock: calculatedStock,
       min_stock: form.has_stock ? Number(form.min_stock || 5) : 5,
+      has_remark: form.has_remark,
+      has_discount: form.has_discount,
       updated_at: new Date().toISOString()
     }
 
@@ -189,22 +195,75 @@ export default function Products() {
 
   function parseImport(text) {
     const lines = text.trim().split('\n').filter(Boolean); const rows = []
-    for (const line of lines) {
-      const cols = line.split(/,|\t/).map(c => c.trim().replace(/^"|"$/g, ''))
+    if (lines.length === 0) return
+
+    // Extract headers and create a map of column names to indices
+    const headerCols = lines[0].split(/,|\t/).map(c => c.trim().replace(/^"|"$/g, '').toLowerCase())
+    const colMap = {}
+    headerCols.forEach((col, idx) => {
+      if (col.includes('product')) colMap['product_name'] = idx
+      else if (col.includes('keyword')) colMap['keyword'] = idx
+      else if (col.includes('length')) colMap['length'] = idx
+      else if (col.includes('width')) colMap['width'] = idx
+      else if (col === 'unit') colMap['unit'] = idx
+      else if (col.includes('rate')) colMap['rate'] = idx
+      else if (col.includes('calculation')) colMap['calculation_type'] = idx
+      else if (col === 'has stock') colMap['has_stock'] = idx
+      else if (col === 'stock') colMap['stock'] = idx
+      else if (col.includes('min stock')) colMap['min_stock'] = idx
+      else if (col.includes('remark')) colMap['has_remark'] = idx
+      else if (col.includes('discount')) colMap['has_discount'] = idx
+    })
+
+    const hasDynamic = ('product_name' in colMap && 'rate' in colMap && 'unit' in colMap)
+    const isNewFormat = lines[0].toLowerCase().includes('keyword')
+
+    for (let i = 0; i < lines.length; i++) {
+      const cols = lines[i].split(/,|\t/).map(c => c.trim().replace(/^"|"$/g, ''))
       if (cols.length < 3) continue
-      const [product_name, length, width, unit, rate, calculation_type, has_stock, stock, min_stock] = cols
-      if (product_name.toLowerCase().includes('product') && rate?.toLowerCase().includes('rate')) continue
+      
+      let product_name, keyword, length, width, unit, rate, calculation_type, has_stock, stock, min_stock, has_remark, has_discount
+      
+      if (hasDynamic) {
+        if (i === 0) continue // skip header row since we mapped it
+        product_name = cols[colMap['product_name']]
+        keyword = cols[colMap['keyword']]
+        length = cols[colMap['length']]
+        width = cols[colMap['width']]
+        unit = cols[colMap['unit']]
+        rate = cols[colMap['rate']]
+        calculation_type = cols[colMap['calculation_type']]
+        has_stock = cols[colMap['has_stock']]
+        stock = cols[colMap['stock']]
+        min_stock = cols[colMap['min_stock']]
+        has_remark = cols[colMap['has_remark']]
+        has_discount = cols[colMap['has_discount']]
+      } else {
+        if (isNewFormat) {
+          [product_name, keyword, length, width, unit, rate, calculation_type, has_stock, stock, min_stock, has_remark, has_discount] = cols
+        } else {
+          [product_name, length, width, unit, rate, calculation_type, has_stock, stock, min_stock] = cols
+        }
+        if (product_name?.toLowerCase().includes('product') && rate?.toLowerCase().includes('rate')) continue
+      }
       if (isNaN(Number(rate)) || !product_name || !unit) continue
-      const calcType = calculation_type?.toUpperCase().trim() === 'SQFT' ? 'SQFT' : 'QUANTITY'
+      
+      const ct = calculation_type?.toUpperCase().trim()
+      const calcType = (ct === 'SQFT' || ct === 'INCH' || ct === 'FEET') ? ct : 'QUANTITY'
       const parsedHasStock = has_stock?.toLowerCase() === 'yes' || has_stock?.toLowerCase() === 'true'
       const parsedStock = parsedHasStock && !isNaN(Number(stock)) ? Number(stock) : 0
       const parsedMinStock = min_stock && !isNaN(Number(min_stock)) ? Number(min_stock) : 5
+      const parsedHasRemark = has_remark?.toLowerCase() === 'yes' || has_remark?.toLowerCase() === 'true'
+      const parsedHasDiscount = has_discount?.toLowerCase() === 'yes' || has_discount?.toLowerCase() === 'true'
+      
       rows.push({
         product_name: product_name.toUpperCase(),
+        keyword: keyword ? keyword.trim() : null,
         length: length ? Number(length) : null,
         width:  width  ? Number(width)  : null,
         unit: unit.trim(), rate: Number(rate), calculation_type: calcType,
-        has_stock: parsedHasStock, stock: parsedStock, min_stock: parsedMinStock
+        has_stock: parsedHasStock, stock: parsedStock, min_stock: parsedMinStock,
+        has_remark: parsedHasRemark, has_discount: parsedHasDiscount
       })
     }
     setImportPreview(rows)
@@ -248,18 +307,22 @@ export default function Products() {
 
   function handleExport() {
     if (!filtered.length) { showToast('No products to export', 'error'); return }
-    const headers = ['Product Name', 'Length', 'Width', 'Unit', 'Rate', 'Calculation Type', 'Has Stock', 'Stock']
+    const headers = ['Product Name', 'Keyword', 'Length', 'Width', 'Unit', 'Rate', 'Calculation Type', 'Has Stock', 'Stock', 'Min Stock', 'Has Remark', 'Has Discount']
     const csvRows = [headers.join(',')]
     for (const p of filtered) {
       csvRows.push([
         `"${p.product_name}"`,
+        `"${p.keyword || ''}"`,
         p.length || '',
         p.width || '',
         p.unit,
         p.rate,
         p.calculation_type,
         p.has_stock ? 'Yes' : 'No',
-        p.has_stock ? p.stock : ''
+        p.has_stock ? p.stock : '',
+        p.min_stock || '5',
+        p.has_remark ? 'Yes' : 'No',
+        p.has_discount ? 'Yes' : 'No'
       ].join(','))
     }
     const blob = new Blob([csvRows.join('\n')], { type: 'text/csv' })
@@ -345,10 +408,10 @@ export default function Products() {
             <div className="item-grid" style={{ marginTop:8, marginLeft: 26 }}>
               <div><span style={{ color:'var(--text-muted)', fontSize:12 }}>UNIT</span><br />{p.unit}</div>
               <div><span style={{ color:'var(--text-muted)', fontSize:12 }}>RATE</span><br />₹{Number(p.rate).toFixed(2)}</div>
-              {(p.calculation_type === 'SQFT' || p.calculation_type === 'INCH') && (p.length || p.width) && (
+              {(p.calculation_type === 'SQFT' || p.calculation_type === 'INCH' || p.calculation_type === 'FEET') && (p.length || p.width) && (
                 <>
-                  <div><span style={{ color:'var(--text-muted)', fontSize:12 }}>LENGTH</span><br />{p.length} {p.calculation_type === 'INCH' ? 'in' : 'ft'}</div>
-                  <div><span style={{ color:'var(--text-muted)', fontSize:12 }}>WIDTH</span><br />{p.width} {p.calculation_type === 'INCH' ? 'in' : 'ft'}</div>
+                  <div><span style={{ color:'var(--text-muted)', fontSize:12 }}>LENGTH</span><br />{p.length} {p.calculation_type === 'INCH' || p.calculation_type === 'FEET' ? (p.calculation_type === 'FEET' ? 'ft' : 'in') : 'ft'}</div>
+                  <div><span style={{ color:'var(--text-muted)', fontSize:12 }}>WIDTH</span><br />{p.width} {p.calculation_type === 'INCH' || p.calculation_type === 'FEET' ? (p.calculation_type === 'FEET' ? 'ft' : 'in') : 'ft'}</div>
                 </>
               )}
               {p.has_stock && (
@@ -386,6 +449,11 @@ export default function Products() {
               <input name="product_name" value={form.product_name} onChange={handleFormChange}
                 placeholder="e.g. C PLY 4 18 MM 7 x 4" style={{ textTransform:'uppercase' }} />
             </div>
+            <div className="field">
+              <label>Highlight Keyword (Optional)</label>
+              <input name="keyword" value={form.keyword || ''} onChange={handleFormChange}
+                placeholder="e.g. PLYWOOD or SPECIAL OFFER" />
+            </div>
             <div className="field-row">
               <div className="field">
                 <label>Unit *</label>
@@ -414,8 +482,9 @@ export default function Products() {
                 <label>Calculation Type *</label>
                 <select name="calculation_type" value={form.calculation_type} onChange={handleFormChange}>
                   <option value="QUANTITY">QUANTITY</option>
-                  <option value="SQFT">SQFT (L x W x Nos)</option>
-                  <option value="INCH">INCH (L x W x Nos x Rate)</option>
+                  <option value="SQFT">SQFT</option>
+                  <option value="INCH">INCH</option>
+                  <option value="FEET">FEET</option>
                 </select>
               </div>
             </div>
@@ -424,7 +493,7 @@ export default function Products() {
               <input name="rate" type="number" inputMode="decimal"
                 value={form.rate} onChange={handleFormChange} placeholder="0.00" />
             </div>
-            {(form.calculation_type === 'SQFT' || form.calculation_type === 'INCH') && (
+            {(form.calculation_type === 'SQFT' || form.calculation_type === 'INCH' || form.calculation_type === 'FEET') && (
               <div className="field-row">
                 <div className="field">
                   <label>Length ({form.calculation_type === 'INCH' ? 'in' : 'ft'}) *</label>
@@ -442,6 +511,18 @@ export default function Products() {
               <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', fontWeight: 'bold' }}>
                 <input type="checkbox" name="has_stock" checked={!!form.has_stock} onChange={handleFormChange} style={{ width: 16, height: 16 }} />
                 Manage Stock for this product
+              </label>
+            </div>
+            <div className="field">
+              <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', fontWeight: 'bold' }}>
+                <input type="checkbox" name="has_remark" checked={!!form.has_remark} onChange={handleFormChange} style={{ width: 16, height: 16 }} />
+                Ask Remark / Extra Note for this product
+              </label>
+            </div>
+            <div className="field">
+              <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', fontWeight: 'bold' }}>
+                <input type="checkbox" name="has_discount" checked={!!form.has_discount} onChange={handleFormChange} style={{ width: 16, height: 16 }} />
+                Allow Discount for this product
               </label>
             </div>
             {form.has_stock && (

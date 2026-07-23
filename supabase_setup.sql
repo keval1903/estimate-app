@@ -21,7 +21,13 @@ CREATE TABLE IF NOT EXISTS products (
 
 -- Migration for existing database:
 ALTER TABLE products ADD COLUMN IF NOT EXISTS min_stock NUMERIC(12,2) DEFAULT 5;
+ALTER TABLE products ADD COLUMN IF NOT EXISTS has_remark BOOLEAN DEFAULT FALSE;
+ALTER TABLE products ADD COLUMN IF NOT EXISTS has_discount BOOLEAN DEFAULT FALSE;
+ALTER TABLE products ADD COLUMN IF NOT EXISTS keyword VARCHAR(255);
 
+-- Update check constraint to allow FEET
+ALTER TABLE products DROP CONSTRAINT IF EXISTS products_calculation_type_check;
+ALTER TABLE products ADD CONSTRAINT products_calculation_type_check CHECK (calculation_type IN ('QUANTITY', 'SQFT', 'INCH', 'FEET'));
 -- 2. SITES TABLE (for site name autocomplete)
 CREATE TABLE IF NOT EXISTS sites (
   id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
@@ -84,6 +90,11 @@ CREATE TABLE IF NOT EXISTS estimate_items (
 
 -- Migration for existing database:
 ALTER TABLE estimate_items ADD COLUMN IF NOT EXISTS remark TEXT;
+ALTER TABLE estimate_items ADD COLUMN IF NOT EXISTS discount_percent NUMERIC(5,2) DEFAULT 0;
+
+-- Update check constraint to allow FEET
+ALTER TABLE estimate_items DROP CONSTRAINT IF EXISTS estimate_items_calculation_type_snapshot_check;
+ALTER TABLE estimate_items ADD CONSTRAINT estimate_items_calculation_type_snapshot_check CHECK (calculation_type_snapshot IN ('QUANTITY', 'SQFT', 'INCH', 'FEET'));
 
 -- 6. SAFE BILL NUMBER FUNCTION (atomic, no duplicates)
 CREATE OR REPLACE FUNCTION get_next_bill_number()
