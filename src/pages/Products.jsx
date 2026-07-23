@@ -192,18 +192,19 @@ export default function Products() {
     for (const line of lines) {
       const cols = line.split(/,|\t/).map(c => c.trim().replace(/^"|"$/g, ''))
       if (cols.length < 3) continue
-      const [product_name, length, width, unit, rate, calculation_type, has_stock, stock] = cols
+      const [product_name, length, width, unit, rate, calculation_type, has_stock, stock, min_stock] = cols
       if (product_name.toLowerCase().includes('product') && rate?.toLowerCase().includes('rate')) continue
       if (isNaN(Number(rate)) || !product_name || !unit) continue
       const calcType = calculation_type?.toUpperCase().trim() === 'SQFT' ? 'SQFT' : 'QUANTITY'
       const parsedHasStock = has_stock?.toLowerCase() === 'yes' || has_stock?.toLowerCase() === 'true'
       const parsedStock = parsedHasStock && !isNaN(Number(stock)) ? Number(stock) : 0
+      const parsedMinStock = min_stock && !isNaN(Number(min_stock)) ? Number(min_stock) : 5
       rows.push({
         product_name: product_name.toUpperCase(),
         length: length ? Number(length) : null,
         width:  width  ? Number(width)  : null,
         unit: unit.trim(), rate: Number(rate), calculation_type: calcType,
-        has_stock: parsedHasStock, stock: parsedStock
+        has_stock: parsedHasStock, stock: parsedStock, min_stock: parsedMinStock
       })
     }
     setImportPreview(rows)
