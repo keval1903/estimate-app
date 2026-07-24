@@ -28,6 +28,7 @@ export default function Products() {
   const [deleteConfirm, setDeleteConfirm] = useState(null)
   const [importText, setImportText] = useState('')
   const [importPreview, setImportPreview] = useState([])
+  const [importDiscrepancies, setImportDiscrepancies] = useState([])
   const [selectedIds, setSelectedIds] = useState(new Set())
   const fileRef = useRef()
 
@@ -294,26 +295,67 @@ export default function Products() {
         }
         if (product_name?.toLowerCase().includes('product') && rate?.toLowerCase().includes('rate')) continue
       }
-      if (isNaN(Number(rate)) || !product_name || !unit) continue
+      const errors = []
+      if (!product_name?.trim()) errors.push('Missing product name')
+      if (!unit?.trim()) errors.push('Missing unit')
+
+      const parsedRate = Number(rate)
+      if (isNaN(parsedRate)) {
+        errors.push(`Invalid rate format: "${rate}"`)
+      } else if (rate && rate.trim() && parsedRate === 0 && rate.trim() !== '0') {
+        errors.push(`Rate "${rate}" evaluated to 0`)
+      }
       
       const ct = calculation_type?.toUpperCase().trim()
       const calcType = (ct === 'SQFT' || ct === 'INCH' || ct === 'FEET') ? ct : 'QUANTITY'
-      const parsedHasStock = has_stock?.toLowerCase() === 'yes' || has_stock?.toLowerCase() === 'true'
-      const parsedStock = parsedHasStock && !isNaN(Number(stock)) ? Number(stock) : 0
-      const parsedMinStock = min_stock && !isNaN(Number(min_stock)) ? Number(min_stock) : 5
-      const parsedHasRemark = has_remark?.toLowerCase() === 'yes' || has_remark?.toLowerCase() === 'true'
-      const parsedHasDiscount = has_discount?.toLowerCase() === 'yes' || has_discount?.toLowerCase() === 'true'
       
+      const hsLower = has_stock?.trim().toLowerCase()
+      let parsedHasStock = false
+      if (hsLower && !['yes','no','true','false',''].includes(hsLower)) {
+        errors.push(`Unrecognized has_stock: "${has_stock}"`)
+      } else {
+        parsedHasStock = hsLower === 'yes' || hsLower === 'true'
+      }
+
+      const parsedStock = parsedHasStock && !isNaN(Number(stock)) ? Number(stock) : 0
+      if (parsedHasStock && isNaN(Number(stock))) errors.push(`Invalid stock value: "${stock}"`)
+
+      const parsedMinStock = min_stock && !isNaN(Number(min_stock)) ? Number(min_stock) : 5
+      
+      const hrLower = has_remark?.trim().toLowerCase()
+      let parsedHasRemark = false
+      if (hrLower && !['yes','no','true','false',''].includes(hrLower)) errors.push(`Unrecognized has_remark: "${has_remark}"`)
+      else parsedHasRemark = hrLower === 'yes' || hrLower === 'true'
+
+      const hdLower = has_discount?.trim().toLowerCase()
+      let parsedHasDiscount = false
+      if (hdLower && !['yes','no','true','false',''].includes(hdLower)) errors.push(`Unrecognized has_discount: "${has_discount}"`)
+      else parsedHasDiscount = hdLower === 'yes' || hdLower === 'true'
+
       rows.push({
-        product_name: product_name.toUpperCase(),
+        product_name: product_name ? product_name.toUpperCase().trim() : '',
         keyword: keyword ? keyword.trim() : null,
         length: length ? Number(length) : null,
         width:  width  ? Number(width)  : null,
-        unit: unit.trim(), rate: Number(rate), calculation_type: calcType,
+        unit: unit ? unit.trim() : '', 
+        rate: isNaN(parsedRate) ? 0 : parsedRate, 
+        calculation_type: calcType,
         has_stock: parsedHasStock, stock: parsedStock, min_stock: parsedMinStock,
-        has_remark: parsedHasRemark, has_discount: parsedHasDiscount
+        has_remark: parsedHasRemark, has_discount: parsedHasDiscount,
+        raw_rate: rate?.trim(),
+        errors
       })
     }
+
+    // Sort rows so that errors appear at the top of the list
+    rows.sort((a, b) => {
+      const aHasErrors = a.errors && a.errors.length > 0;
+      const bHasErrors = b.errors && b.errors.length > 0;
+      if (aHasErrors && !bHasErrors) return -1;
+      if (!aHasErrors && bHasErrors) return 1;
+      return 0;
+    });
+
     setImportPreview(rows)
   }
 
@@ -322,6 +364,7 @@ export default function Products() {
     setSaving(true);
     let added = 0, updated = 0;
     let hasError = false;
+    const discrepancies = [];
 
     const toInsert = [];
     const toUpdate = [];
@@ -343,7 +386,8 @@ export default function Products() {
     // Process Updates using upsert
     for (let i = 0; i < toUpdate.length; i += chunkSize) {
       const chunk = toUpdate.slice(i, i + chunkSize);
-      const { data, error } = await supabase.from('products').upsert(chunk, { onConflict: 'id' }).select();
+      const dbChunk = chunk.map(({ raw_rate, errors, ...rest }) => rest);
+      const { data, error } = await supabase.from('products').upsert(dbChunk, { onConflict: 'id' }).select();
       if (error) { 
         console.error('Update error:', error);
         hasError = true; 
@@ -354,11 +398,16 @@ export default function Products() {
       for (const r of data || []) {
         const previewRow = chunk.find(p => p.product_name.toLowerCase() === r.product_name.toLowerCase());
         const existing = products.find(p => p.id === r.id);
-        if (previewRow && previewRow.has_stock) {
-          const oldStock = existing ? (existing.stock || 0) : 0;
-          const diff = previewRow.stock - oldStock;
-          if (diff !== 0) {
-            historyBatch.push({ product_id: r.id, change_type: 'CSV_IMPORT', quantity_changed: diff });
+        if (previewRow) {
+          if (previewRow.has_stock) {
+            const oldStock = existing ? (existing.stock || 0) : 0;
+            const diff = previewRow.stock - oldStock;
+            if (diff !== 0) {
+              historyBatch.push({ product_id: r.id, change_type: 'CSV_IMPORT', quantity_changed: diff });
+            }
+          }
+          if (Number(r.rate) !== Number(previewRow.raw_rate) && !isNaN(Number(previewRow.raw_rate))) {
+            discrepancies.push({ product_name: r.product_name, field: 'rate', expected: previewRow.raw_rate, saved: r.rate })
           }
         }
       }
@@ -372,7 +421,8 @@ export default function Products() {
     if (!hasError) {
       for (let i = 0; i < toInsert.length; i += chunkSize) {
         const chunk = toInsert.slice(i, i + chunkSize);
-        const { data, error } = await supabase.from('products').insert(chunk).select();
+        const dbChunk = chunk.map(({ raw_rate, errors, ...rest }) => rest);
+        const { data, error } = await supabase.from('products').insert(dbChunk).select();
         if (error) { 
           console.error('Insert error:', error);
           hasError = true; 
@@ -382,8 +432,13 @@ export default function Products() {
         const historyBatch = [];
         for (const r of data || []) {
           const previewRow = chunk.find(p => p.product_name.toLowerCase() === r.product_name.toLowerCase());
-          if (previewRow && previewRow.has_stock) {
-            historyBatch.push({ product_id: r.id, change_type: 'CSV_IMPORT', quantity_changed: previewRow.stock });
+          if (previewRow) {
+            if (previewRow.has_stock) {
+              historyBatch.push({ product_id: r.id, change_type: 'CSV_IMPORT', quantity_changed: previewRow.stock });
+            }
+            if (Number(r.rate) !== Number(previewRow.raw_rate) && !isNaN(Number(previewRow.raw_rate))) {
+              discrepancies.push({ product_name: r.product_name, field: 'rate', expected: previewRow.raw_rate, saved: r.rate })
+            }
           }
         }
         if (historyBatch.length > 0) {
@@ -401,6 +456,7 @@ export default function Products() {
     }
     setShowImport(false); setImportPreview([]); setImportText('');
     fetchProducts();
+    if (discrepancies.length > 0) setImportDiscrepancies(discrepancies);
   }
 
   function handleExport() {
@@ -703,6 +759,45 @@ export default function Products() {
         </div>
       )}
 
+      {importDiscrepancies.length > 0 && (
+        <div className="modal-overlay">
+          <div className="modal-box" style={{ maxWidth: 600 }}>
+            <div className="modal-title">
+              <span style={{ color: 'var(--warning-dark, #b54708)' }}>Data Discrepancy Report</span>
+              <button className="btn btn-ghost" onClick={() => setImportDiscrepancies([])}>✕</button>
+            </div>
+            <div style={{ marginBottom: 16, fontSize: 14 }}>
+              The database altered the following values during save. This usually happens if a number was rounded by the database schema.
+            </div>
+            <div style={{ maxHeight: 300, overflowY: 'auto' }}>
+              <table style={{ width: '100%', textAlign: 'left', borderCollapse: 'collapse', fontSize: 13 }}>
+                <thead>
+                  <tr style={{ background: 'var(--surface-50)' }}>
+                    <th style={{ padding: '8px' }}>Product</th>
+                    <th style={{ padding: '8px' }}>Field</th>
+                    <th style={{ padding: '8px' }}>Raw (Sent)</th>
+                    <th style={{ padding: '8px' }}>Saved (DB)</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {importDiscrepancies.map((d, i) => (
+                    <tr key={i} style={{ borderBottom: '1px solid var(--border-light)' }}>
+                      <td style={{ padding: '8px' }}>{d.product_name}</td>
+                      <td style={{ padding: '8px' }}>{d.field}</td>
+                      <td style={{ padding: '8px', color: 'var(--danger)' }}>{d.expected}</td>
+                      <td style={{ padding: '8px', color: 'var(--success)' }}>{d.saved}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <button className="btn btn-primary btn-full" style={{ marginTop: 16 }} onClick={() => setImportDiscrepancies([])}>
+              Acknowledge
+            </button>
+          </div>
+        </div>
+      )}
+
       {showImport && (
         <div className="modal-overlay" onClick={e => e.target===e.currentTarget && setShowImport(false)}>
           <div className="modal-box">
@@ -729,12 +824,20 @@ export default function Products() {
             </div>
             {importPreview.length > 0 && (
               <div style={{ marginBottom:16 }}>
-                <div className="section-label">{importPreview.length} rows ready</div>
+                <div className="section-label">
+                  {importPreview.length} rows parsed 
+                  {importPreview.some(r => r.errors?.length > 0) && <span style={{ color:'var(--danger)', marginLeft:8 }}>(Contains errors)</span>}
+                </div>
                 <div style={{ maxHeight:160, overflowY:'auto', fontSize:13 }}>
                   {importPreview.map((r,i) => (
-                    <div key={i} style={{ padding:'6px 0', borderBottom:'1px solid #f0f0f0' }}>
-                      <strong>{r.product_name}</strong> — {r.unit} @ ₹{r.rate}
+                    <div key={i} style={{ padding:'6px 0', borderBottom:'1px solid #f0f0f0', color: r.errors?.length ? 'var(--danger)' : 'inherit' }}>
+                      <strong>{r.product_name || 'Missing Name'}</strong> — {r.unit || 'No Unit'} @ ₹{r.raw_rate}
                       {r.calculation_type === 'SQFT' && ` (${r.length}×${r.width} ft)`}
+                      {r.errors?.length > 0 && (
+                        <div style={{ fontSize: 11, marginTop: 4 }}>
+                          {r.errors.map((e, idx) => <div key={idx}>⚠ {e}</div>)}
+                        </div>
+                      )}
                     </div>
                   ))}
                 </div>
@@ -743,7 +846,7 @@ export default function Products() {
             <div style={{ display:'flex', gap:10 }}>
               <button className="btn btn-secondary btn-full" onClick={() => setShowImport(false)}>Cancel</button>
               <button className="btn btn-primary btn-full" onClick={handleImport}
-                disabled={saving || importPreview.length === 0}>
+                disabled={saving || importPreview.length === 0 || importPreview.some(r => r.errors?.length > 0)}>
                 {saving ? 'Importing...' : `Import ${importPreview.length} Products`}
               </button>
             </div>
