@@ -448,7 +448,7 @@ export default function CreateEstimate() {
   function validateProduct() {
     if (!productForm.product_name.trim()) return 'Product name is required'
     if (!productForm.unit.trim()) return 'Unit is required'
-    if (!productForm.rate || isNaN(productForm.rate) || Number(productForm.rate) < 0) return 'Valid rate is required'
+    if (productForm.rate === '' || productForm.rate === null || productForm.rate === undefined || isNaN(productForm.rate) || Number(productForm.rate) < 0) return 'Valid rate is required'
     if (productForm.calculation_type === 'SQFT' || productForm.calculation_type === 'INCH' || productForm.calculation_type === 'FEET') {
       if (!productForm.length || isNaN(productForm.length)) return 'Length is required'
       if (!productForm.width  || isNaN(productForm.width))  return 'Width is required'
@@ -505,7 +505,7 @@ export default function CreateEstimate() {
   function saveItem() {
     if (!itemForm.product_name_snapshot) { showToast('Select a product', 'error'); return }
     const rate = parseFloat(itemForm.rate)
-    if (!rate || rate <= 0) { showToast('Enter a valid rate', 'error'); return }
+    if (isNaN(rate) || rate < 0 || itemForm.rate === '') { showToast('Enter a valid rate', 'error'); return }
 
     const isPieceBased = itemForm.calculation_type_snapshot === 'SQFT' || itemForm.calculation_type_snapshot === 'INCH' || itemForm.calculation_type_snapshot === 'FEET'
 

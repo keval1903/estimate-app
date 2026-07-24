@@ -101,7 +101,7 @@ export default function Products() {
   function validate() {
     if (!form.product_name.trim()) return 'Product name is required'
     if (!form.unit.trim()) return 'Unit is required'
-    if (!form.rate || isNaN(form.rate) || Number(form.rate) < 0) return 'Valid rate is required'
+    if (form.rate === '' || form.rate === null || form.rate === undefined || isNaN(form.rate) || Number(form.rate) < 0) return 'Valid rate is required'
     if (form.calculation_type === 'SQFT' || form.calculation_type === 'INCH' || form.calculation_type === 'FEET') {
       if (!form.length || isNaN(form.length)) return 'Length is required'
       if (!form.width  || isNaN(form.width))  return 'Width is required'
