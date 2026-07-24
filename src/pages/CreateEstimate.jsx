@@ -283,9 +283,14 @@ export default function CreateEstimate() {
       setSuggestionIdx(-1)
       return 
     }
-    const results = allProducts.filter(p =>
-      p.product_name.toLowerCase().includes(q) || p.product_name.toLowerCase().replace(/\s+/g, '').includes(q.replace(/\s+/g, ''))
-    )
+    const searchTerms = q.split(/\s+/)
+    const results = allProducts.filter(p => {
+      const pName = p.product_name.toLowerCase()
+      const matchesAllTerms = searchTerms.every(term => pName.includes(term))
+      return pName.includes(q) || 
+             pName.replace(/\s+/g, '').includes(q.replace(/\s+/g, '')) ||
+             matchesAllTerms
+    })
     setProductSuggestions(results)
     setSuggestionIdx(-1)
   }, [productSearch, allProducts])

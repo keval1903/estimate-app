@@ -136,14 +136,21 @@ export default function StockReport() {
   }
 
   // Filtered lists based on search & product dropdown
+  const s = search.trim().toLowerCase()
+  const searchTerms = s.split(/\s+/)
+
   const filteredProducts = trackedProducts.filter(p => {
-    const matchesSearch = p.product_name.toLowerCase().includes(search.toLowerCase())
+    const pName = p.product_name.toLowerCase()
+    const matchesAllTerms = searchTerms.every(term => pName.includes(term))
+    const matchesSearch = pName.includes(s) || matchesAllTerms
     const matchesSelect = selectedProductId === 'ALL' || p.id === selectedProductId
     return matchesSearch && matchesSelect
   })
 
   const filteredLowStockProducts = allLowStockProducts.filter(p => {
-    const matchesSearch = p.product_name.toLowerCase().includes(search.toLowerCase())
+    const pName = p.product_name.toLowerCase()
+    const matchesAllTerms = searchTerms.every(term => pName.includes(term))
+    const matchesSearch = pName.includes(s) || matchesAllTerms
     const matchesSelect = selectedProductId === 'ALL' || p.id === selectedProductId
     return matchesSearch && matchesSelect
   })
@@ -153,8 +160,8 @@ export default function StockReport() {
     const pName = h.products?.product_name || ''
     const bNum = h.estimates?.bill_number?.toString() || ''
     const site = h.estimates?.site_name || ''
-    const s = search.toLowerCase()
-    const matchesSearch = pName.toLowerCase().includes(s) || bNum.includes(s) || site.toLowerCase().includes(s)
+    const matchesAllTerms = searchTerms.every(term => pName.toLowerCase().includes(term))
+    const matchesSearch = pName.toLowerCase().includes(s) || bNum.includes(s) || site.toLowerCase().includes(s) || matchesAllTerms
     return matchesProduct && matchesSearch
   })
 
