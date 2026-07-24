@@ -61,11 +61,11 @@ export default function Products() {
         hasMore = data?.length === batchSize
         from += batchSize
       }
-      setProduts(allProducts)
+      setProducts(allProducts)
     } catch(e) {
-      showToast('Faled to load products','error')
+      showToast('Failed to load products','error')
     }
-    setLoadng(false)
+    setLoading(false)
   }
 
   const filtered = products.filter(p =>
