@@ -404,7 +404,7 @@ export default function EstimateView() {
               ))}
 
               {/* Empty padding rows */}
-              {Array.from({ length: layoutMode === 'compact' ? 2 : Math.max(0, (paperSize === 'a5' ? 8 : 15) - items.length) }).map((_, i) => (
+              {Array.from({ length: layoutMode === 'compact' ? 2 : Math.max(0, (paperSize === 'a5' ? 18 : 40) - items.length) }).map((_, i) => (
                 <tr key={`empty-${i}`}>
                   <td style={{ border: '1px solid #000', height: 26 }}>&nbsp;</td>
                   <td style={{ border: '1px solid #000' }} />
