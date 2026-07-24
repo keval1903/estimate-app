@@ -314,38 +314,88 @@ export default function Products() {
 
   async function handleImport() {
     if (!importPreview.length) { showToast('No valid rows to import', 'error'); return }
-    setSaving(true); let added = 0, updated = 0
-    for (const row of importPreview) {
-      const existing = products.find(p => p.product_name.toLowerCase() === row.product_name.toLowerCase())
-      let targetId = null
-      let oldStock = 0
-      let data, error
+    setSaving(true);
+    let added = 0, updated = 0;
+    let hasError = false;
 
+    const toInsert = [];
+    const toUpdate = [];
+
+    // Separate rows into inserts and updates
+    for (const row of importPreview) {
+      const existing = products.find(p => p.product_name.toLowerCase() === row.product_name.toLowerCase());
       if (existing) {
-        targetId = existing.id
-        oldStock = existing.stock || 0
-        ;({ data, error } = await supabase.from('products').update(row).eq('id', targetId).select().single())
-        if (!error) updated++
+        toUpdate.push({ ...row, id: existing.id });
+        updated++;
       } else {
-        ;({ data, error } = await supabase.from('products').insert(row).select().single())
-        if (!error) { added++; targetId = data.id }
+        toInsert.push(row);
+        added++;
+      }
+    }
+
+    const chunkSize = 200;
+
+    // Process Updates using upsert
+    for (let i = 0; i < toUpdate.length; i += chunkSize) {
+      const chunk = toUpdate.slice(i, i + chunkSize);
+      const { data, error } = await supabase.from('products').upsert(chunk, { onConflict: 'id' }).select();
+      if (error) { 
+        console.error('Update error:', error);
+        hasError = true; 
+        break; 
       }
 
-      if (!error && row.has_stock && data) {
-        const diff = row.stock - oldStock
-        if (diff !== 0 || !existing) {
-          await supabase.from('stock_history').insert({
-            product_id: targetId,
-            change_type: 'CSV_IMPORT',
-            quantity_changed: diff !== 0 ? diff : row.stock
-          })
+      const historyBatch = [];
+      for (const r of data || []) {
+        const previewRow = chunk.find(p => p.product_name.toLowerCase() === r.product_name.toLowerCase());
+        const existing = products.find(p => p.id === r.id);
+        if (previewRow && previewRow.has_stock) {
+          const oldStock = existing ? (existing.stock || 0) : 0;
+          const diff = previewRow.stock - oldStock;
+          if (diff !== 0) {
+            historyBatch.push({ product_id: r.id, change_type: 'CSV_IMPORT', quantity_changed: diff });
+          }
+        }
+      }
+      if (historyBatch.length > 0) {
+        const { error: histError } = await supabase.from('stock_history').insert(historyBatch);
+        if (histError) console.error('History update error:', histError);
+      }
+    }
+
+    // Process Inserts
+    if (!hasError) {
+      for (let i = 0; i < toInsert.length; i += chunkSize) {
+        const chunk = toInsert.slice(i, i + chunkSize);
+        const { data, error } = await supabase.from('products').insert(chunk).select();
+        if (error) { 
+          console.error('Insert error:', error);
+          hasError = true; 
+          break; 
+        }
+
+        const historyBatch = [];
+        for (const r of data || []) {
+          const previewRow = chunk.find(p => p.product_name.toLowerCase() === r.product_name.toLowerCase());
+          if (previewRow && previewRow.has_stock) {
+            historyBatch.push({ product_id: r.id, change_type: 'CSV_IMPORT', quantity_changed: previewRow.stock });
+          }
+        }
+        if (historyBatch.length > 0) {
+          const { error: histError } = await supabase.from('stock_history').insert(historyBatch);
+          if (histError) console.error('History insert error:', histError);
         }
       }
     }
-    setSaving(false)
-    showToast(`Imported: ${added} added, ${updated} updated`)
-    setShowImport(false); setImportPreview([]); setImportText('')
-    fetchProducts()
+
+    setSaving(false);
+    if (hasError) {
+      showToast('Import failed or partially failed', 'error');
+    } else {
+      showToast(`Imported: ${added} added, ${updated} updated`);
+    }
+    setShowImport(false); setImportPreview([]); setImportText('');
+    fetchProducts();
   }
 
   function handleExport() {
