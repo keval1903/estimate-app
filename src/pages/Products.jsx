@@ -58,10 +58,15 @@ export default function Products() {
     }
   
 
-  const filtered = products.filter(p =>
-    p.product_name.toLowerCase().includes(search.toLowerCase()) ||
-    p.unit.toLowerCase().includes(search.toLowerCase())
-  )
+  const s = search.trim().toLowerCase()
+  const sNoSpace = s.replace(/\s+/g, '')
+
+  const filtered = products.filter(p => {
+    const pName = p.product_name.toLowerCase()
+    return pName.includes(s) ||
+           pName.replace(/\s+/g, '').includes(sNoSpace) ||
+           p.unit.toLowerCase().includes(s)
+  })
 
   function openAdd() { setForm(EMPTY_FORM); setEditingId(null); setStockMode('SET'); setShowCustomUnit(false); setShowModal(true) }
 
