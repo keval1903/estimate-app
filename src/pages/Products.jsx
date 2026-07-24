@@ -183,10 +183,25 @@ export default function Products() {
     if (selectedIds.size === 0) return
     if (!window.confirm(`Delete ${selectedIds.size} selected products?`)) return
     setSaving(true)
-    const { error } = await supabase.from('products').delete().in('id', Array.from(selectedIds))
+
+    const ids = Array.from(selectedIds)
+    const chunkSize = 200
+    let hasError = false
+
+    for (let i = 0; i < ids.length; i += chunkSize) {
+      const chunk = ids.slice(i, i + chunkSize)
+      const { error } = await supabase.from('products').delete().in('id', chunk)
+      if (error) {
+        hasError = true
+        break
+      }
+    }
+
     setSaving(false)
-    if (error) showToast('Delete failed', 'error')
-    else {
+    if (hasError) {
+      showToast('Delete failed or partially failed', 'error')
+      fetchProducts()
+    } else {
       showToast(`Deleted ${selectedIds.size} products`)
       setSelectedIds(new Set())
       fetchProducts()
@@ -200,12 +215,33 @@ export default function Products() {
     reader.readAsText(file)
   }
 
+  // Parse a CSV line properly, respecting quoted fields that may contain commas
+  function parseCsvLine(line) {
+    const result = []
+    let current = ''
+    let inQuotes = false
+    for (let i = 0; i < line.length; i++) {
+      const ch = line[i]
+      if (inQuotes) {
+        if (ch === '"' && line[i + 1] === '"') { current += '"'; i++ }
+        else if (ch === '"') { inQuotes = false }
+        else { current += ch }
+      } else {
+        if (ch === '"') { inQuotes = true }
+        else if (ch === ',' || ch === '\t') { result.push(current.trim()); current = '' }
+        else { current += ch }
+      }
+    }
+    result.push(current.trim())
+    return result
+  }
+
   function parseImport(text) {
     const lines = text.trim().split('\n').filter(Boolean); const rows = []
     if (lines.length === 0) return
 
     // Extract headers and create a map of column names to indices
-    const headerCols = lines[0].split(/,|\t/).map(c => c.trim().replace(/^"|"$/g, '').toLowerCase())
+    const headerCols = parseCsvLine(lines[0]).map(c => c.toLowerCase())
     const colMap = {}
     headerCols.forEach((col, idx) => {
       if (col.includes('product')) colMap['product_name'] = idx
@@ -226,7 +262,7 @@ export default function Products() {
     const isNewFormat = lines[0].toLowerCase().includes('keyword')
 
     for (let i = 0; i < lines.length; i++) {
-      const cols = lines[i].split(/,|\t/).map(c => c.trim().replace(/^"|"$/g, ''))
+      const cols = parseCsvLine(lines[i])
       if (cols.length < 3) continue
       
       let product_name, keyword, length, width, unit, rate, calculation_type, has_stock, stock, min_stock, has_remark, has_discount
