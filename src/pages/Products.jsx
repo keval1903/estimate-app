@@ -45,7 +45,7 @@ export default function Products() {
 
   async function fetchProducts() {
     setLoading(true)
-    const { data, error } = await supabase.from('products').select('*').order('product_name')
+    const { data, error } = await supabase.from('products').select('*').order('product_name').limit(5000)
     if (error) showToast('Failed to load products', 'error')
     else setProducts(data || [])
     setLoading(false)
