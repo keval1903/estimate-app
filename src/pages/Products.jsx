@@ -55,7 +55,7 @@ export default function Products() {
       let from = 0
       let hasMore = true
       while (hasMore) {
-        const { data, error } = await supabase.from('products').select(*).order('product_name').range(from, from + batchSize - 1)
+        const { data, error } = await supabase.from('products').select('*').order('product_name').range(from, from + batchSize - 1)
         if (error) { showToast('Failed to load products', 'error'); break }
         allProducts = [...allProducts, ...(data || [])]
         hasMore = data?.length === batchSize
