@@ -45,10 +45,28 @@ export default function Products() {
 
   async function fetchProducts() {
     setLoading(true)
-    const { data, error } = await supabase.from('products').select('*').order('product_name').range(0, 4999)
-    if (error) showToast('Failed to load products', 'error')
-    else setProducts(data || [])
-    setLoading(false)
+    // const { data, error } = await supabase.from('products').select('*').order('product_name').range(0, 4999)
+    // if (error) showToast('Failed to load products', 'error')
+    // else setProducts(data || [])
+    // setLoading(false)
+    try {
+      const bathSize = 1000
+      let allProducts = []
+      let from = 0
+      let hasMore = true
+      while (hasMore) {
+        const { data, error } = await supabase.from('products').select(*).order('product_name').range(from, from + batchSize - 1)
+        if (error) { showToast('Failed to load products', 'error'); break }
+        allProducts = [...allProducts, ...(data || [])]
+        hasMore = data?.length === batchSize
+        from += batchSize
+      }
+      setProduts(allProducts)
+    } catch(e) {
+      showToast('Faled to load products','error')
+    }
+    setLoadng(false)
+  }
   }
 
   const filtered = products.filter(p =>
