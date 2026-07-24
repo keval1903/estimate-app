@@ -274,13 +274,13 @@ export default function CreateEstimate() {
   useEffect(() => {
     const q = productSearch.trim().toLowerCase()
     if (!q) { 
-      setProductSuggestions(allProducts.slice(0, 8))
+      setProductSuggestions(allProducts.slice)
       setSuggestionIdx(-1)
       return 
     }
     const results = allProducts.filter(p =>
-      p.product_name.toLowerCase().includes(q)
-    ).slice(0, 8)
+      p.product_name.toLowerCase().includes(q) || p.product_name.toLowerCase().replace(/\s+/g, '').includes(q.replace(/\s+/g, ''))
+    )
     setProductSuggestions(results)
     setSuggestionIdx(-1)
   }, [productSearch, allProducts])
