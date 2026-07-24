@@ -425,7 +425,7 @@ export default function EstimateView() {
                   {totalQty % 1 === 0 ? totalQty : totalQty.toFixed(2)}
                 </td>
                 <td style={{ border: '1px solid #000', padding: '6px 4px', textAlign: 'right', fontSize: 13, whiteSpace: 'nowrap' }}>Gr.Total</td>
-                <td style={{ border: '1px solid #000', padding: '6px 6px', textAlign: 'right', fontSize: 14, fontWeight: 700 }}>
+                <td style={{ border: '1px solid #000', padding: '6px 6px', textAlign: 'right', fontSize: 14, fontWeight: 700, whiteSpace: 'nowrap' }}>
                   {grandTotal.toFixed(2)}
                 </td>
               </tr>
