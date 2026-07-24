@@ -45,28 +45,33 @@ export default function Products() {
 
   async function fetchProducts() {
     setLoading(true)
+    const bathSize = 1000
+    let allProducts = []
+    let from = 0 
+    let fetching = true   
+
     // const { data, error } = await supabase.from('products').select('*').order('product_name').range(0, 4999)
     // if (error) showToast('Failed to load products', 'error')
     // else setProducts(data || [])
     // setLoading(false)
-    try {
-      const bathSize = 1000
-      let allProducts = []
-      let from = 0
-      let hasMore = true
-      while (hasMore) {
-        const { data, error } = await supabase.from('products').select('*').order('product_name').range(from, from + batchSize - 1)
-        if (error) { showToast('Failed to load products', 'error'); break }
+    while (fetching){
+      const { data, error } = await supabase.from('products').select('*').order('product_name').range(from, from + batchSize - 1)
+      if (error) {
+        showToast('Failed to load products', 'error')
+        fetching = false
+      } else {
         allProducts = [...allProducts, ...(data || [])]
-        hasMore = data?.length === batchSize
-        from += batchSize
+        if (!data || data.length < batchSize) {
+          fetching = false
+        } else {
+          from += bathSize
+        }
       }
-      setProducts(allProducts)
-    } catch(e) {
-      showToast('Failed to load products','error')
     }
+    setProducts(allProducts)
     setLoading(false)
   }
+  
 
   const filtered = products.filter(p =>
     p.product_name.toLowerCase().includes(search.toLowerCase()) ||
