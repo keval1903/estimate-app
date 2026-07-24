@@ -67,7 +67,6 @@ export default function Products() {
     }
     setLoadng(false)
   }
-  }
 
   const filtered = products.filter(p =>
     p.product_name.toLowerCase().includes(search.toLowerCase()) ||
