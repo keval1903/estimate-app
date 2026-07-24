@@ -123,13 +123,18 @@ export default function CreateEstimate() {
   const nosInputRef = useRef()
   const qtyInputRef = useRef()
 
-  // ── Load products & sites ──
+  //── Load products & sites ──
   useEffect(() => {
-    supabase.from('products').select('*').order('product_name')
-      .then(({ data }) => setAllProducts(data || []))
+    Promise.all([
+        supabase.from('products').select('*').order('product_name').range(0, 999),
+        supabase.from('products').select('*').order('product_name').range(1000, 1999)
+    ]).then(([batch1, batch2]) => {
+      setAllProducts ([...(batch1.data || []), ...(batch2.data || [])])
+    })
     supabase.from('sites').select('*').order('site_name')
       .then(({ data }) => setAllSites(data || []))
   }, [])
+
 
   const draftKey = isEdit ? `estimate_draft_${id}` : 'estimate_draft_new'
 
@@ -274,7 +279,7 @@ export default function CreateEstimate() {
   useEffect(() => {
     const q = productSearch.trim().toLowerCase()
     if (!q) { 
-      setProductSuggestions(allProducts.slice)
+      setProductSuggestions(allProducts)
       setSuggestionIdx(-1)
       return 
     }
