@@ -1,0 +1,470 @@
+import { useState, useEffect, useMemo } from 'react'
+import { useNavigate, useParams } from 'react-router-dom'
+import { supabase } from '../lib/supabase'
+
+export default function ClientLedger() {
+  const { id } = useParams()
+  const navigate = useNavigate()
+  
+  const [client, setClient] = useState(null)
+  const [ledger, setLedger] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [search, setSearch] = useState('')
+  const [exporting, setExporting] = useState(false)
+  const [profile, setProfile] = useState(null)
+  const [fromDate, setFromDate] = useState('')
+  const [toDate, setToDate] = useState('')
+
+  // Payment Modal
+  const [showModal, setShowModal] = useState(false)
+  const [payDate, setPayDate] = useState(new Date().toISOString().split('T')[0])
+  const [payAmount, setPayAmount] = useState('')
+  const [payMode, setPayMode] = useState('Cash')
+  const [payRef, setPayRef] = useState('')
+  const [payDesc, setPayDesc] = useState('Payment Received')
+
+  async function loadData() {
+    setLoading(true)
+    try {
+      const { data: pData } = await supabase.from('profile').select('*').single()
+      if (pData) setProfile(pData)
+
+      const { data: cData, error: cErr } = await supabase.from('clients').select('*').eq('id', id).single()
+      if (cErr && cErr.code !== 'PGRST116') throw cErr;
+      if (!cData) {
+        setLoading(false)
+        return
+      }
+      setClient(cData)
+
+      // Fetch all estimates AND quotations for this client
+      const { data: estData, error: estErr } = await supabase.from('estimates').select('*').eq('client_id', id)
+      if (estErr) throw estErr;
+      
+      const { data: payData, error: payErr } = await supabase.from('payments').select('*').eq('client_id', id)
+      if (payErr) throw payErr;
+
+      const entries = []
+      
+      // Opening Balance
+      if (Number(cData.opening_balance)) {
+        entries.push({
+          date: cData.created_at,
+          description: 'Opening Balance',
+          debit: cData.opening_balance > 0 ? cData.opening_balance : 0,
+          credit: cData.opening_balance < 0 ? Math.abs(cData.opening_balance) : 0,
+          type: 'OPENING'
+        });
+      }
+
+      for (const e of (estData || [])) {
+        if (e.type === 'QUOTATION') {
+          entries.push({
+            date: e.bill_date,
+            description: `Quotation #${e.bill_number} (₹${Number(e.grand_total).toFixed(2)})`,
+            debit: 0,
+            credit: 0,
+            type: 'QUOTE',
+            ref: e.id
+          });
+        } else {
+          entries.push({
+            date: e.bill_date,
+            description: `Bill #${e.bill_number}`,
+            debit: e.grand_total,
+            credit: 0,
+            type: 'BILL',
+            ref: e.id
+          });
+        }
+      }
+
+      for (const p of (payData || [])) {
+        entries.push({
+          date: p.payment_date,
+          description: p.description + (p.payment_mode ? ` (${p.payment_mode})` : ''),
+          debit: 0,
+          credit: p.amount,
+          type: 'PAYMENT',
+          ref: p.id
+        });
+      }
+      
+      // Sort chronologically
+      entries.sort((a, b) => parseDate(a.date) - parseDate(b.date))
+
+      // Calculate running balance
+      let bal = 0
+      const finalEntries = entries.map(e => {
+        bal = bal + Number(e.debit) - Number(e.credit)
+        return { ...e, balance: bal }
+      })
+
+      setLedger(finalEntries)
+    } catch (e) {
+      console.error("Load Data Error:", e)
+      alert("Error loading data: " + (e.message || e.toString()))
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  function parseDate(dateStr) {
+    if (!dateStr) return new Date(0)
+    const d = new Date(dateStr)
+    if (!isNaN(d.getTime())) return d
+    const parts = String(dateStr).replace(/\//g, '-').split('-')
+    if (parts.length === 3 && parts[2].length === 4) {
+      return new Date(`${parts[2]}-${parts[1]}-${parts[0]}T00:00:00`)
+    }
+    return new Date(0)
+  }
+
+  const filteredLedger = useMemo(() => {
+    let result = []
+    let ob = null
+    const fd = fromDate ? new Date(fromDate) : null
+    const td = toDate ? new Date(toDate) : null
+
+    if (fd) {
+      const prior = ledger.filter(l => parseDate(l.date) < fd)
+      if (prior.length > 0) ob = prior[prior.length - 1].balance
+      else ob = Number(client?.opening_balance || 0)
+    }
+
+    const currentRows = ledger.filter(l => {
+      const d = parseDate(l.date)
+      if (fd && d < fd) return false
+      if (td && d > td) return false
+      
+      if (search.trim()) {
+        const terms = search.toLowerCase().trim().split(/\s+/)
+        const target = `${l.description || ''} ${l.date || ''}`.toLowerCase()
+        if (!terms.every(t => target.includes(t))) return false
+      }
+      return true
+    })
+
+    if (fd && ob !== null) {
+       result.push({
+         date: fromDate,
+         description: 'Opening Balance (Brought Forward)',
+         debit: 0,
+         credit: 0,
+         balance: ob,
+         type: 'OPENING'
+       })
+    }
+
+    result = [...result, ...currentRows]
+    return result
+  }, [ledger, fromDate, toDate, search, client])
+
+  useEffect(() => { loadData() }, [id])
+
+  async function handleAddPayment(e) {
+    e.preventDefault()
+    if (!payAmount) return
+    const { error } = await supabase.from('payments').insert([{
+      client_id: id,
+      payment_date: payDate,
+      amount: payAmount,
+      payment_mode: payMode,
+      reference_number: payRef,
+      description: payDesc
+    }])
+    if (!error) {
+      setShowModal(false)
+      setPayAmount('')
+      setPayRef('')
+      setPayDesc('Payment Received')
+      loadData()
+    } else {
+      alert(error.message)
+    }
+  }
+
+  async function generatePDF() {
+    const { default: jsPDF } = await import('jspdf')
+    const { default: autoTable } = await import('jspdf-autotable')
+
+    const doc = new jsPDF()
+    
+    // ---- HEADER ----
+    doc.setFontSize(22)
+    doc.setFont('helvetica', 'bold')
+    doc.setTextColor(140, 120, 90) // Professional Dark Beige
+    doc.text('STATEMENT OF ACCOUNT', 14, 25)
+
+    if (fromDate || toDate) {
+      doc.setFontSize(10)
+      doc.setFont('helvetica', 'normal')
+      const pF = fromDate ? new Date(fromDate).toLocaleDateString('en-GB') : 'Start'
+      const pT = toDate ? new Date(toDate).toLocaleDateString('en-GB') : 'Today'
+      doc.text(`Period: ${pF} to ${pT}`, 14, 31)
+    }
+
+    let yPos = 35
+
+    // Divider
+    doc.setDrawColor(220, 220, 220)
+    doc.setLineWidth(0.5)
+    doc.line(14, yPos + 2, 196, yPos + 2)
+
+    // ---- CLIENT & SUMMARY DETAILS ----
+    yPos += 12
+    doc.setFontSize(11)
+    doc.setFont('helvetica', 'bold')
+    doc.text('BILL TO:', 14, yPos)
+    
+    doc.setFont('helvetica', 'normal')
+    doc.text(client?.name || '', 14, yPos + 6)
+    if (client?.mobile) doc.text(`Mobile: ${client.mobile}`, 14, yPos + 12)
+
+    doc.setFont('helvetica', 'bold')
+    doc.text('STATEMENT DATE:', 196, yPos, { align: 'right' })
+    doc.setFont('helvetica', 'normal')
+    doc.text(new Date().toLocaleDateString('en-GB'), 196, yPos + 6, { align: 'right' })
+
+    const finalBalance = filteredLedger.length > 0 ? filteredLedger[filteredLedger.length - 1].balance : 0
+    doc.setFont('helvetica', 'bold')
+    doc.text('AMOUNT DUE:', 196, yPos + 14, { align: 'right' })
+    doc.setFontSize(12)
+    doc.setTextColor(220, 38, 38) // Red if due
+    if (finalBalance < 0) doc.setTextColor(16, 185, 129) // Green if credit
+    if (finalBalance === 0) doc.setTextColor(0, 0, 0)
+    
+    doc.text(`Rs. ${Math.abs(finalBalance).toFixed(2)} ${finalBalance > 0 ? 'Dr' : (finalBalance < 0 ? 'Cr' : '')}`, 196, yPos + 20, { align: 'right' })
+
+    doc.setTextColor(0, 0, 0) // reset
+
+    // ---- TABLE ----
+    const tableData = filteredLedger.map(l => {
+       const dateStr = (() => {
+          const d = new Date(l.date)
+          if (!isNaN(d.getTime())) return d.toLocaleDateString('en-GB')
+          const parts = String(l.date).replace(/\//g, '-').split('-')
+          if (parts.length === 3 && parts[2].length === 4) {
+            return new Date(`${parts[2]}-${parts[1]}-${parts[0]}T00:00:00`).toLocaleDateString('en-GB')
+          }
+          return String(l.date).replace(/-/g, '/')
+        })()
+       return [
+         dateStr,
+         String(l.description).replace(/₹/g, 'Rs. '),
+         l.debit > 0 ? l.debit.toFixed(2) : '-',
+         l.credit > 0 ? l.credit.toFixed(2) : '-',
+         `${Math.abs(l.balance).toFixed(2)} ${l.balance > 0 ? 'Dr' : (l.balance < 0 ? 'Cr' : '')}`
+       ]
+    })
+
+    autoTable(doc, {
+      startY: yPos + 30,
+      head: [['Date', 'Description', 'Debit (Bill)', 'Credit (Paid)', 'Balance']],
+      body: tableData,
+      theme: 'grid',
+      headStyles: { 
+        fillColor: [215, 205, 185], // Elegant Beige
+        textColor: 0, // Black text for contrast
+        fontStyle: 'bold'
+      },
+      styles: {
+        fontSize: 10,
+        cellPadding: 5,
+        lineColor: [220, 220, 220]
+      },
+      alternateRowStyles: {
+        fillColor: [248, 250, 252]
+      },
+      columnStyles: {
+        2: { halign: 'right' },
+        3: { halign: 'right' },
+        4: { halign: 'right', fontStyle: 'bold' }
+      }
+    })
+
+    return doc
+  }
+
+  async function handleDownloadPDF() {
+    setExporting(true)
+    try {
+      const doc = await generatePDF()
+      doc.save(`Ledger-${client?.name || 'Client'}.pdf`)
+    } catch (e) {
+      alert("Failed to generate PDF: " + e.message)
+    } finally {
+      setExporting(false)
+    }
+  }
+
+  async function handleShareWhatsApp() {
+    setExporting(true)
+    try {
+      const doc = await generatePDF()
+      const blob = doc.output('blob')
+      const file = new File([blob], `Ledger-${client?.name || 'Client'}.pdf`, { type: 'application/pdf' })
+
+      const text = `Hello ${client?.name || ''}, please find your Statement of Account attached.`
+
+      if (navigator.share && navigator.canShare && navigator.canShare({ files: [file] })) {
+        await navigator.share({
+          files: [file],
+          title: 'Statement of Account',
+          text: text
+        })
+      } else {
+        // Fallback for desktop/unsupported browsers
+        doc.save(`Ledger-${client?.name || 'Client'}.pdf`)
+        alert("Your PDF has been downloaded. We will now open WhatsApp where you can manually attach the file.")
+        let phone = client?.mobile ? String(client.mobile).replace(/\D/g, '') : ''
+        if (phone && phone.length === 10) phone = '91' + phone
+        window.open(`https://wa.me/${phone}?text=${encodeURIComponent(text)}`, '_blank')
+      }
+    } catch (e) {
+      alert("Failed to share: " + e.message)
+    } finally {
+      setExporting(false)
+    }
+  }
+
+  return (
+    <div className="app-container">
+      <div className="header">
+        <button className="back-btn" onClick={() => navigate(-1)}>← Back</button>
+        <h1>Statement of Account</h1>
+        <div style={{ width: 60 }} />
+      </div>
+
+      <div className="page" style={{ padding: 16 }}>
+        {loading ? (
+          <div style={{ textAlign: 'center', padding: 20 }}>Loading...</div>
+        ) : !client ? (
+          <div style={{ textAlign: 'center', padding: 20 }}>Client not found.</div>
+        ) : (
+          <>
+            <div className="card" style={{ padding: 16, marginBottom: 16 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 12 }}>
+                <div>
+                  <div style={{ fontSize: 20, fontWeight: 700 }}>{client.name}</div>
+                  <div style={{ color: 'var(--text-muted)' }}>{client.mobile}</div>
+                </div>
+                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                  <button className="btn btn-secondary btn-sm" onClick={handleDownloadPDF} disabled={exporting}>
+                    📥 {exporting ? 'Wait...' : 'PDF'}
+                  </button>
+                  <button className="btn btn-secondary btn-sm" onClick={handleShareWhatsApp} disabled={exporting} style={{ background: '#25D366', color: 'white', border: 'none' }}>
+                    💬 WhatsApp
+                  </button>
+                  <button className="primary-btn" style={{ padding: '6px 12px', margin: 0 }} onClick={() => setShowModal(true)}>
+                    + Add Payment
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <div style={{ display: 'flex', gap: 12, marginBottom: 16, flexWrap: 'wrap' }}>
+               <div className="search-bar" style={{ flex: 1, margin: 0, minWidth: 200 }}>
+                  <span>🔍</span>
+                  <input
+                    placeholder="Search transactions..."
+                    value={search}
+                    onChange={e => setSearch(e.target.value)}
+                  />
+                  {search && <button className="btn btn-ghost btn-sm" onClick={() => setSearch('')}>✕</button>}
+               </div>
+               <div style={{ display: 'flex', gap: 8, alignItems: 'center', background: 'var(--surface-color)', padding: '0 12px', borderRadius: 8, border: '1px solid var(--border-light)' }}>
+                  <span style={{ fontSize: 13, color: 'var(--text-muted)' }}>From:</span>
+                  <input type="date" value={fromDate} onChange={e => setFromDate(e.target.value)} style={{ border: 'none', background: 'transparent', outline: 'none', padding: '8px 0' }} />
+               </div>
+               <div style={{ display: 'flex', gap: 8, alignItems: 'center', background: 'var(--surface-color)', padding: '0 12px', borderRadius: 8, border: '1px solid var(--border-light)' }}>
+                  <span style={{ fontSize: 13, color: 'var(--text-muted)' }}>To:</span>
+                  <input type="date" value={toDate} onChange={e => setToDate(e.target.value)} style={{ border: 'none', background: 'transparent', outline: 'none', padding: '8px 0' }} />
+               </div>
+               {(fromDate || toDate) && (
+                 <button className="btn btn-ghost btn-sm" onClick={() => { setFromDate(''); setToDate('') }}>Clear Filter</button>
+               )}
+            </div>
+
+            <div className="card" style={{ overflowX: 'auto' }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+                <thead>
+                  <tr style={{ background: '#f8fafc', borderBottom: '2px solid #e2e8f0' }}>
+                    <th style={{ padding: '10px 12px', textAlign: 'left' }}>Date</th>
+                    <th style={{ padding: '10px 12px', textAlign: 'left' }}>Description</th>
+                    <th style={{ padding: '10px 12px', textAlign: 'right' }}>Debit (Bill)</th>
+                    <th style={{ padding: '10px 12px', textAlign: 'right' }}>Credit (Paid)</th>
+                    <th style={{ padding: '10px 12px', textAlign: 'right' }}>Balance</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {filteredLedger.map((l, i) => (
+                    <tr key={i} style={{ borderBottom: '1px solid #f1f5f9', background: l.type === 'OPENING' ? '#fffbeb' : (l.type === 'QUOTE' ? '#f8fafc' : 'transparent') }}>
+                      <td style={{ padding: '10px 12px' }}>
+                        {(() => {
+                          const d = new Date(l.date)
+                          if (!isNaN(d.getTime())) return d.toLocaleDateString('en-GB')
+                          const parts = String(l.date).replace(/\//g, '-').split('-')
+                          if (parts.length === 3 && parts[2].length === 4) {
+                            return new Date(`${parts[2]}-${parts[1]}-${parts[0]}T00:00:00`).toLocaleDateString('en-GB')
+                          }
+                          return String(l.date).replace(/-/g, '/')
+                        })()}
+                      </td>
+                      <td style={{ padding: '10px 12px', fontWeight: l.type === 'BILL' ? 600 : (l.type === 'QUOTE' ? 500 : 400), color: l.type === 'QUOTE' ? '#64748b' : '#000' }}>
+                        {l.description}
+                      </td>
+                      <td style={{ padding: '10px 12px', textAlign: 'right', color: '#ef4444' }}>{l.debit > 0 ? l.debit.toFixed(2) : '-'}</td>
+                      <td style={{ padding: '10px 12px', textAlign: 'right', color: '#10b981' }}>{l.credit > 0 ? l.credit.toFixed(2) : '-'}</td>
+                      <td style={{ padding: '10px 12px', textAlign: 'right', fontWeight: l.type === 'QUOTE' ? 400 : 600, color: l.type === 'QUOTE' ? '#94a3b8' : '#000' }}>
+                        {Math.abs(l.balance).toFixed(2)} {l.balance > 0 ? 'Dr' : (l.balance < 0 ? 'Cr' : '')}
+                      </td>
+                    </tr>
+                  ))}
+                  {filteredLedger.length === 0 && (
+                    <tr><td colSpan={5} style={{ textAlign: 'center', padding: 20 }}>No transactions found.</td></tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+
+            {showModal && (
+              <div className="modal-overlay">
+                <div className="modal-content">
+                  <h3 style={{ marginTop: 0 }}>Add Payment</h3>
+                  <form onSubmit={handleAddPayment} style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                    <div>
+                      <label style={{ fontSize: 12, fontWeight: 600 }}>Date</label>
+                      <input type="date" value={payDate} onChange={e => setPayDate(e.target.value)} required style={{ width: '100%', padding: '8px', border: '1px solid #ccc', borderRadius: 4 }} />
+                    </div>
+                    <div>
+                      <label style={{ fontSize: 12, fontWeight: 600 }}>Amount (₹)</label>
+                      <input type="number" step="0.01" value={payAmount} onChange={e => setPayAmount(e.target.value)} required style={{ width: '100%', padding: '8px', border: '1px solid #ccc', borderRadius: 4 }} />
+                    </div>
+                    <div>
+                      <label style={{ fontSize: 12, fontWeight: 600 }}>Payment Mode</label>
+                      <select value={payMode} onChange={e => setPayMode(e.target.value)} style={{ width: '100%', padding: '8px', border: '1px solid #ccc', borderRadius: 4 }}>
+                        <option>Cash</option>
+                        <option>UPI / GPay</option>
+                        <option>Bank Transfer / NEFT</option>
+                        <option>Cheque</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label style={{ fontSize: 12, fontWeight: 600 }}>Description</label>
+                      <input type="text" value={payDesc} onChange={e => setPayDesc(e.target.value)} style={{ width: '100%', padding: '8px', border: '1px solid #ccc', borderRadius: 4 }} />
+                    </div>
+                    <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
+                      <button type="submit" className="primary-btn" style={{ flex: 1, margin: 0 }}>Save Payment</button>
+                      <button type="button" className="home-btn" style={{ flex: 1, margin: 0, background: '#f1f5f9' }} onClick={() => setShowModal(false)}>Cancel</button>
+                    </div>
+                  </form>
+                </div>
+              </div>
+            )}
+          </>
+        )}
+      </div>
+    </div>
+  )
+}

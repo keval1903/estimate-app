@@ -24,13 +24,21 @@ export default function Home() {
 
   return (
     <div className="app-container">
-      <div className="top-nav">
+      <div className="top-nav" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <span className="nav-title">📋 AB Estimate App</span>
-        {connOk !== null && (
-          <span className={`conn-status ${connOk ? 'conn-ok' : 'conn-err'}`}>
-            {connOk ? '● Live' : '● Offline'}
-          </span>
-        )}
+        <div style={{ display: 'flex', gap: '1rem', alignItems: 'center' }}>
+          {connOk !== null && (
+            <span className={`conn-status ${connOk ? 'conn-ok' : 'conn-err'}`}>
+              {connOk ? '● Live' : '● Offline'}
+            </span>
+          )}
+          <button 
+            onClick={async () => await supabase.auth.signOut()}
+            style={{ padding: '0.25rem 0.5rem', borderRadius: '4px', border: '1px solid #d1d5db', background: 'white', cursor: 'pointer', fontSize: '0.875rem' }}
+          >
+            Logout
+          </button>
+        </div>
       </div>
 
       <div className="page">

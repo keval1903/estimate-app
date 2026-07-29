@@ -1,0 +1,126 @@
+import { useState } from 'react'
+import { useNavigate } from 'react-router-dom'
+import { supabase } from '../lib/supabase'
+import { useAuth } from '../context/AuthContext'
+
+export default function Login() {
+  const navigate = useNavigate()
+  const { user } = useAuth()
+  
+  const [username, setUsername] = useState('')
+  const [password, setPassword] = useState('')
+  const [error, setError] = useState(null)
+  const [loading, setLoading] = useState(false)
+
+  // If user is already logged in, redirect them immediately
+  if (user) {
+    navigate('/', { replace: true })
+    return null
+  }
+
+  const handleLogin = async (e) => {
+    e.preventDefault()
+    setError(null)
+    setLoading(true)
+    
+    // Simulate username login by appending @estimateapp.local
+    const email = `${username}@estimateapp.local`
+
+    const { error } = await supabase.auth.signInWithPassword({
+      email,
+      password,
+    })
+
+    if (error) {
+      setError(error.message)
+      setLoading(false)
+    } else {
+      navigate('/', { replace: true })
+    }
+  }
+
+  return (
+    <div style={{
+      display: 'flex', 
+      height: '100vh', 
+      alignItems: 'center', 
+      justifyContent: 'center', 
+      backgroundColor: '#f9fafb'
+    }}>
+      <div style={{
+        background: 'white',
+        padding: '2rem',
+        borderRadius: '8px',
+        boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1)',
+        width: '100%',
+        maxWidth: '400px'
+      }}>
+        <h2 style={{ textAlign: 'center', marginBottom: '1.5rem', fontSize: '1.5rem', fontWeight: 'bold' }}>Sign In</h2>
+        
+        {error && (
+          <div style={{ backgroundColor: '#fee2e2', color: '#b91c1c', padding: '0.75rem', borderRadius: '4px', marginBottom: '1rem', fontSize: '0.875rem' }}>
+            {error}
+          </div>
+        )}
+
+        <form onSubmit={handleLogin} style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+          <div>
+            <label htmlFor="username" style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.875rem', fontWeight: '500' }}>Username</label>
+            <input
+              id="username"
+              type="text"
+              required
+              value={username}
+              onChange={(e) => setUsername(e.target.value)}
+              style={{
+                width: '100%',
+                padding: '0.5rem',
+                border: '1px solid #d1d5db',
+                borderRadius: '4px',
+                outline: 'none'
+              }}
+              placeholder="admin"
+            />
+          </div>
+          <div>
+            <label htmlFor="password" style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.875rem', fontWeight: '500' }}>Password</label>
+            <input
+              id="password"
+              type="password"
+              required
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              style={{
+                width: '100%',
+                padding: '0.5rem',
+                border: '1px solid #d1d5db',
+                borderRadius: '4px',
+                outline: 'none'
+              }}
+              placeholder="••••••••"
+            />
+          </div>
+          
+          <button
+            type="submit"
+            disabled={loading}
+            style={{
+              marginTop: '0.5rem',
+              backgroundColor: '#4f46e5',
+              color: 'white',
+              padding: '0.75rem',
+              border: 'none',
+              borderRadius: '4px',
+              fontWeight: 'bold',
+              cursor: loading ? 'not-allowed' : 'pointer',
+              opacity: loading ? 0.7 : 1
+            }}
+          >
+            {loading ? 'Processing...' : 'Sign In'}
+          </button>
+        </form>
+      </div>
+    </div>
+  )
+}
+

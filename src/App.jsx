@@ -1,4 +1,6 @@
-import { BrowserRouter, Routes, Route } from 'react-router-dom'
+import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
+import { AuthProvider, useAuth } from './context/AuthContext'
+import Login from './pages/Login'
 import Home from './pages/Home'
 import Products from './pages/Products'
 import EstimateList from './pages/EstimateList'
@@ -6,18 +8,28 @@ import CreateEstimate from './pages/CreateEstimate'
 import EstimateView from './pages/EstimateView'
 import StockReport from './pages/StockReport'
 
+function ProtectedRoute({ children }) {
+  const { user, loading } = useAuth()
+  if (loading) return <div style={{ padding: '2rem', textAlign: 'center' }}>Loading...</div>
+  if (!user) return <Navigate to="/login" replace />
+  return children
+}
+
 export default function App() {
   return (
-    <BrowserRouter>
-      <Routes>
-        <Route path="/"                   element={<Home />} />
-        <Route path="/products"           element={<Products />} />
-        <Route path="/estimates"          element={<EstimateList />} />
-        <Route path="/estimate/new"       element={<CreateEstimate />} />
-        <Route path="/estimate/edit/:id"  element={<CreateEstimate />} />
-        <Route path="/estimate/view/:id"  element={<EstimateView />} />
-        <Route path="/stock-report"       element={<StockReport />} />
-      </Routes>
-    </BrowserRouter>
+    <AuthProvider>
+      <BrowserRouter>
+        <Routes>
+          <Route path="/login" element={<Login />} />
+          <Route path="/" element={<ProtectedRoute><Home /></ProtectedRoute>} />
+          <Route path="/products" element={<ProtectedRoute><Products /></ProtectedRoute>} />
+          <Route path="/estimates" element={<ProtectedRoute><EstimateList /></ProtectedRoute>} />
+          <Route path="/estimate/new" element={<ProtectedRoute><CreateEstimate /></ProtectedRoute>} />
+          <Route path="/estimate/edit/:id" element={<ProtectedRoute><CreateEstimate /></ProtectedRoute>} />
+          <Route path="/estimate/view/:id" element={<ProtectedRoute><EstimateView /></ProtectedRoute>} />
+          <Route path="/stock-report" element={<ProtectedRoute><StockReport /></ProtectedRoute>} />
+        </Routes>
+      </BrowserRouter>
+    </AuthProvider>
   )
 }
